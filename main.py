@@ -1,14 +1,15 @@
 from app.db import init_db, close_db
 from app.db import log_event
 from app.db import query_recent_logs
-import datetime
+from app.utils import now_iso
 import asyncio
+from app.ssh_honeypot import start_ssh_honeypot
 
-async def main():
+async def test_db():
    try:
         print("Initializing database and logging a test event...")
         await init_db()
-        ts = datetime.datetime.now().isoformat()
+        ts = now_iso()
         await log_event(ts, src_ip="127.0.0.1", src_port=55555, dst_port=2222,
                     protocol="ssh", event_type="auth_attempt",
                     raw="root:password123", parsed='{"user":"root"}',
@@ -26,6 +27,22 @@ async def main():
    finally:
         print("\nDone. Closing DB...")
         await close_db()
+        
+async def main():
+    await init_db()
+
+    ssh_server = await start_ssh_honeypot(port=2222)
+
+    print("Honeypot running. Press Ctrl+C to stop.")
+    try:
+        await asyncio.Future() 
+    except KeyboardInterrupt:
+        print("Stopping...")
+    finally:
+        ssh_server.close()
+        await ssh_server.wait_closed()
+        await close_db()
+
     
 if __name__ == "__main__":
     asyncio.run(main())
