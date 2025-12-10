@@ -4,15 +4,14 @@ from app.db import log_event
 from app.utils import now_iso
 import logging
 
-
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] %(message)s'
 )
 log = logging.getLogger("honeypot")
 
-
 HOST_KEY_PATH = os.environ.get("HP_SSH_HOST_KEY", "data/ssh_host_key")
+
 
 async def ensure_host_key():
     """Generate SSH host key if it doesn't exist."""
@@ -26,7 +25,6 @@ async def ensure_host_key():
         log.info(f"[SSH] Using existing host key: {HOST_KEY_PATH}")
 
 
-
 async def start_ssh_honeypot(port=2222):
     await ensure_host_key()
     log.info(f"[SSH] Starting fake SSH server on port {port}...")
@@ -37,13 +35,17 @@ async def start_ssh_honeypot(port=2222):
         server_host_keys=[HOST_KEY_PATH],
         encoding=None
     )
-    
+
 
 class HoneySSHServer(asyncssh.SSHServer):
     """Handles authentication attempts."""
 
     def __init__(self):
         super().__init__()
+        self.conn = None
+
+    def connection_made(self, conn):
+        self.conn = conn
 
     def begin_auth(self, username):
         log.info(f"[SSH] begin_auth for username '{username}'")
@@ -59,19 +61,21 @@ class HoneySSHServer(asyncssh.SSHServer):
     async def validate_password(self, username, password):
         log.info(f"[SSH] Password attempt user='{username}' pass='{password}'")
         try:
+            peer = self.conn.get_extra_info("peername")
+            sock = self.conn.get_extra_info("sockname")
             await log_event(
-            timestamp=now_iso(),
-            src_ip=self._conn.get_extra_info("peername")[0],
-            src_port=self._conn.get_extra_info("peername")[1],
-            dst_port=self._conn.get_extra_info("sockname")[1],
-            protocol="ssh",
-            event_type="auth_attempt",
-            raw=f"{username}:{password}",
-            parsed='{"user": "%s"}' % username,
-            classification="password_guess",
-            confidence=0.9,
-            details='{}',
-            headers='{}'
+                timestamp=now_iso(),
+                src_ip=peer[0],
+                src_port=peer[1],
+                dst_port=sock[1],
+                protocol="ssh",
+                event_type="auth_attempt",
+                raw=f"{username}:{password}",
+                parsed='{"user": "%s"}' % username,
+                classification="password_guess",
+                confidence=0.9,
+                details='{}',
+                headers='{}'
             )
             log.info("[DB] Logged password attempt")
         except Exception as e:
@@ -83,11 +87,13 @@ class HoneySSHServer(asyncssh.SSHServer):
     async def validate_public_key(self, username, key):
         log.info(f"[SSH] Public key attempt user='{username}' key='{key}'")
         try:
+            peer = self.conn.get_extra_info("peername")
+            sock = self.conn.get_extra_info("sockname")
             await log_event(
                 timestamp=now_iso(),
-                src_ip=self._conn.get_extra_info("peername")[0],
-                src_port=self._conn.get_extra_info("peername")[1],
-                dst_port=self._conn.get_extra_info("sockname")[1],
+                src_ip=peer[0],
+                src_port=peer[1],
+                dst_port=sock[1],
                 protocol="ssh",
                 event_type="auth_attempt_pubkey",
                 raw=str(key),
@@ -104,8 +110,7 @@ class HoneySSHServer(asyncssh.SSHServer):
 
     def session_requested(self):
         log.info("[SSH] Shell session requested")
-        return HoneySSHSession(self._conn)
-
+        return HoneySSHSession(self)
 
 
 class HoneySSHSession(asyncssh.SSHServerSession):
