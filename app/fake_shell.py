@@ -55,7 +55,7 @@ class FakeShell:
                     parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
 
             coro = self.log_event(
-                    timestamp=datetime.utcnow().isoformat() + "Z",
+                    timestamp=utils.now_iso(),
                     src_ip=self.peer_ip,
                     src_port=0,
                     dst_ports=0,
