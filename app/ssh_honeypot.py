@@ -142,12 +142,20 @@ class HoneySSHServer(asyncssh.SSHServer):
         # Acquire a slot for concurrent connections. If the semaphore is
         # exhausted this will queue — keeping memory bounded.
         try:
+            # Prefer non-blocking acquire if available
             acquired = _CONN_SEMAPHORE.acquire_nowait()
-        except Exception:
-            # If acquire_nowait is not available or fails, schedule an acquire
+            self._acquired_semaphore = bool(acquired)
+        except AttributeError:
+            # older asyncio may not expose acquire_nowait; schedule an acquire
             asyncio.create_task(_CONN_SEMAPHORE.acquire())
-            acquired = True
-        self._acquired_semaphore = bool(acquired)
+            self._acquired_semaphore = True
+        except Exception:
+            # Fallback: schedule an acquire and mark as acquired
+            try:
+                asyncio.create_task(_CONN_SEMAPHORE.acquire())
+                self._acquired_semaphore = True
+            except Exception:
+                self._acquired_semaphore = False
 
     def begin_auth(self, username):
         log.info(f"[SSH] begin_auth for username '{username}'")
@@ -292,6 +300,15 @@ class HoneySSHServer(asyncssh.SSHServer):
         # access peer information safely.
         return HoneySSHSession(self.conn)
 
+    def connection_lost(self, exc):
+        # Release the semaphore slot if we acquired it when the connection ends
+        try:
+            if getattr(self, '_acquired_semaphore', False):
+                _CONN_SEMAPHORE.release()
+                self._acquired_semaphore = False
+        except Exception:
+            pass
+
 
 class HoneySSHSession(asyncssh.SSHServerSession):
     """Session object handling interactive shell commands."""
@@ -354,7 +371,14 @@ class HoneySSHSession(asyncssh.SSHServerSession):
 
         # Create the fake shell instance
         try:
-            self.shell = FakeShell(log, log_event, peer[0], username=username)
+            # also pass source/destination ports and protocol for accurate logging
+            try:
+                sock = self.conn.get_extra_info("sockname")
+            except Exception:
+                sock = None
+            src_port = peer[1] if peer and len(peer) > 1 else 0
+            dst_port = sock[1] if sock and len(sock) > 1 else 0
+            self.shell = FakeShell(log, log_event, peer[0], src_port=src_port, dst_port=dst_port, protocol="ssh", username=username)
             self._prompt = f"{username}@fakehost:{self.shell.cwd}$ "
             try:
                 self._write("Welcome to Fake Honeypot Shell\n")
@@ -502,11 +526,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                 self._idle_task.cancel()
         except Exception:
             pass
-        # release semaphore slot if acquired (best-effort)
-        try:
-            _CONN_SEMAPHORE.release()
-        except Exception:
-            pass
+        # semaphore release is handled by HoneySSHServer.connection_lost
 
     async def _idle_watchdog(self):
         try:
