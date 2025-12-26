@@ -1,6 +1,9 @@
 # Insert near the top of ssh_honeypot.py (imports)
 import html
 import random
+import re
+import os
+import json
 from datetime import datetime
 import asyncio
 import app.utils as utils
@@ -35,20 +38,36 @@ class FakeShell:
             return
         try:
             # Timestamp and db logging - make sure db_log_func matches your interface
+                # Build parsed payload optionally as real JSON behind a feature flag
+            try:
+                    parsed_flag = os.environ.get("HP_PARSED_JSON", "1")
+                    if parsed is not None:
+                        parsed_value = parsed
+                    elif parsed_flag in ("1", "true", "True"):
+                        try:
+                            parsed_value = json.dumps({"cmd": raw_cmd, "cwd": self.cwd}, ensure_ascii=False)
+                        except Exception:
+                            # Fallback to simple escaped string if json fails
+                            parsed_value = json.dumps({"cmd": str(raw_cmd)})
+                    else:
+                        parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
+            except Exception:
+                    parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
+
             coro = self.log_event(
-                timestamp=datetime.utcnow().isoformat() + "Z",
-                src_ip=self.peer_ip,
-                src_port=0,
-                dst_port=0,
-                protocol="ssh",
-                event_type="command",
-                raw=raw_cmd,
-                parsed=parsed or f'{{"cmd": "{html.escape(raw_cmd)}"}}',
-                classification="command",
-                confidence=0.7,
-                details="{}",
-                headers="{}"
-            )
+                    timestamp=datetime.utcnow().isoformat() + "Z",
+                    src_ip=self.peer_ip,
+                    src_port=0,
+                    dst_ports=0,
+                    protocol="ssh",
+                    event_type="command",
+                    raw=raw_cmd,
+                    parsed=parsed_value,
+                    classification="command",
+                    confidence=0.7,
+                    details="{}",
+                    headers="{}"
+                )
             # Schedule coroutine instead of calling it directly to avoid
             # "coroutine was never awaited" warnings and to not block the
             # current sync caller.

@@ -6,6 +6,7 @@ from app.db import log_event
 from app.utils import now_iso
 import logging
 import random
+import json
 
 # Import the FakeShell implementation you created
 from app.fake_shell import FakeShell
@@ -56,6 +57,37 @@ async def _register_attempt(ip: str):
             _IP_GRANTED.add(ip)
             return True, cur, threshold
         return False, cur, threshold
+
+
+def _safe_parsed(obj):
+    """Return a JSON string for `obj` when HP_PARSED_JSON is enabled.
+
+    If the flag is disabled, return a minimal hand-escaped JSON-like string.
+    This function never raises.
+    """
+    try:
+        flag = os.environ.get("HP_PARSED_JSON", "1")
+        if flag in ("1", "true", "True"):
+            try:
+                return json.dumps(obj, ensure_ascii=False)
+            except Exception:
+                # fallback to str-wrapped dict
+                return json.dumps({"value": str(obj)})
+        # default: return a simple string representation
+        if isinstance(obj, dict):
+            # make a safe simple representation
+            try:
+                # only include stringified values
+                simple = {k: str(v) for k, v in obj.items()}
+                return json.dumps(simple, ensure_ascii=False)
+            except Exception:
+                return json.dumps({"value": str(obj)})
+        return json.dumps({"value": str(obj)})
+    except Exception:
+        try:
+            return json.dumps({"value": str(obj)})
+        except Exception:
+            return '{"value":"<error>"}'
 
 
 async def ensure_host_key():
@@ -142,7 +174,7 @@ class HoneySSHServer(asyncssh.SSHServer):
                 protocol="ssh",
                 event_type="auth_attempt",
                 raw=f"{username}:{password}",
-                parsed='{"user": "%s"}' % username,
+                parsed=_safe_parsed({"user": username}),
                 classification="password_guess",
                 confidence=0.9,
                 details='{}',
@@ -175,7 +207,7 @@ class HoneySSHServer(asyncssh.SSHServer):
                     protocol="ssh",
                     event_type="auth_granted",
                     raw=f"{username}:<redacted>",
-                    parsed=f'{{"user": "{username}"}}',
+                    parsed=_safe_parsed({"user": username}),
                     classification="honeypot_grant",
                     confidence=1.0,
                     details='{}',
@@ -210,7 +242,7 @@ class HoneySSHServer(asyncssh.SSHServer):
                 protocol="ssh",
                 event_type="auth_attempt_pubkey",
                 raw=fingerprint,
-                parsed=f'{{"user": "{username}"}}',
+                parsed=_safe_parsed({"user": username}),
                 classification="pubkey_guess",
                 confidence=0.9,
                 details='{"fingerprint_type":"sha256"}',
@@ -242,7 +274,7 @@ class HoneySSHServer(asyncssh.SSHServer):
                     protocol="ssh",
                     event_type="auth_granted_pubkey",
                     raw=fingerprint,
-                    parsed=f'{{"user": "{username}"}}',
+                    parsed=_safe_parsed({"user": username}),
                     classification="honeypot_grant",
                     confidence=1.0,
                     details='{}',
@@ -402,7 +434,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                             protocol="ssh",
                             event_type="command",
                             raw=line,
-                            parsed=f'{{"cmd": "{line}"}}',
+                            parsed=_safe_parsed({"cmd": line}),
                             classification="command",
                             confidence=0.7,
                             details='{}',
@@ -445,7 +477,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                         protocol="ssh",
                         event_type="command",
                         raw=line,
-                        parsed=f'{{"cmd": "{line}"}}',
+                        parsed=_safe_parsed({"cmd": line}),
                         classification="command",
                         confidence=0.7,
                         details='{}',
