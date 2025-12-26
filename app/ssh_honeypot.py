@@ -283,6 +283,25 @@ class HoneySSHSession(asyncssh.SSHServerSession):
         except Exception:
             self._idle_task = None
 
+    def _write(self, text: str):
+        """Write text to the channel converting LF->CRLF for terminal compatibility."""
+        if not self._chan:
+            return
+        try:
+            if text is None:
+                return
+            if not isinstance(text, str):
+                text = str(text)
+            # Normalize newlines to CRLF which most terminals expect
+            text = text.replace('\n', '\r\n')
+            self._chan.write(text)
+        except Exception:
+            try:
+                # best-effort swallow
+                pass
+            except Exception:
+                pass
+
     def shell_requested(self):
         # Instantiate the FakeShell only for connections that were granted
         try:
@@ -296,7 +315,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
         if ip not in _IP_GRANTED:
             # In case a session is requested without being granted, reject.
             try:
-                self._chan.write("Login incorrect\n")
+                self._write("Login incorrect\n")
             except Exception:
                 pass
             return False
@@ -306,9 +325,9 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             self.shell = FakeShell(log, log_event, peer[0], username=username)
             self._prompt = f"{username}@fakehost:{self.shell.cwd}$ "
             try:
-                self._chan.write("Welcome to Fake Honeypot Shell\n")
-                self._chan.write("Type commands, they will be logged.\n\n")
-                self._chan.write(self._prompt)
+                self._write("Welcome to Fake Honeypot Shell\n")
+                self._write("Type commands, they will be logged.\n\n")
+                self._write(self._prompt)
             except Exception as e:
                 log.error(f"[SSH] Failed to write initial prompt: {e}")
             return True
@@ -359,7 +378,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             # If too many commands, close the session politely
             if self._cmd_count > MAX_COMMANDS_PER_SESSION:
                 try:
-                    self._chan.write("Session command limit reached. Goodbye.\n")
+                    self._write("Session command limit reached. Goodbye.\n")
                     self._chan.close()
                 except Exception:
                     pass
@@ -393,7 +412,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                     res = self.shell.handle_line(line)
                     if res == "__EXIT__":
                         try:
-                            self._chan.write("logout\n")
+                            self._write("logout\n")
                             self._chan.close()
                         except Exception:
                             pass
@@ -402,15 +421,15 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                         # Write command output and reprint prompt
                         try:
                             if res:
-                                self._chan.write(res)
-                            self._chan.write(self._prompt)
+                                self._write(res)
+                            self._write(self._prompt)
                         except Exception:
                             pass
                 except Exception as e:
                     log.error(f"[SSH] FakeShell handling error: {e}")
                     try:
-                        self._chan.write("Internal error\n")
-                        self._chan.write(self._prompt or "$ ")
+                        self._write("Internal error\n")
+                        self._write(self._prompt or "$ ")
                     except Exception:
                         pass
             else:
@@ -435,7 +454,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                 except Exception:
                     pass
                 try:
-                    self._chan.write(f"bash: {line}: command not found\n")
+                    self._write(f"bash: {line}: command not found\n")
                 except Exception:
                     pass
 
@@ -461,9 +480,9 @@ class HoneySSHSession(asyncssh.SSHServerSession):
         try:
             await asyncio.sleep(SESSION_IDLE_TIMEOUT)
             try:
-                if self._chan:
-                    self._chan.write("Session timed out due to inactivity.\n")
-                    self._chan.close()
+                        if self._chan:
+                            self._write("Session timed out due to inactivity.\n")
+                            self._chan.close()
             except Exception:
                 pass
         except asyncio.CancelledError:

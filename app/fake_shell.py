@@ -2,6 +2,8 @@
 import html
 import random
 from datetime import datetime
+import asyncio
+import app.utils as utils
 
 # Add this helper class inside the module
 class FakeShell:
@@ -28,6 +30,9 @@ class FakeShell:
 
     def _log_cmd(self, raw_cmd, parsed=None):
         # log to DB without printing secrets to console
+        if utils.is_blank(raw_cmd):
+            self.logger.debug("[DB] Blank command, not logging")
+            return
         try:
             # Timestamp and db logging - make sure db_log_func matches your interface
             coro = self.log_event(
@@ -52,7 +57,15 @@ class FakeShell:
             except Exception:
                 loop = None
             if loop is not None and loop.is_running():
-                loop.create_task(coro)
+                task = loop.create_task(coro)
+                # Attach a callback to surface exceptions from the background task
+                def _on_done(t):
+                    try:
+                        t.result()
+                    except Exception as ex:
+                        self.logger.error("[DB] Background log_event failed: %s", ex)
+
+                task.add_done_callback(_on_done)
             else:
                 # Best-effort fallback: run it synchronously (rare)
                 try:
