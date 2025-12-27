@@ -1,11 +1,9 @@
-# honneypot/app/db.py
+import asyncio
+import json
+import os
+from typing import Optional, Dict
 
 import aiosqlite
-import asyncio
-import os
-import json
-from typing import Optional, Dict
-from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("HP_DB_PATH", os.path.join(BASE_DIR, "..", "data", "honeypot.db"))

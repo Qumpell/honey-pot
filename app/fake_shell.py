@@ -1,14 +1,10 @@
-# Insert near the top of ssh_honeypot.py (imports)
-import html
-import random
-import re
-import os
-import json
-from datetime import datetime
 import asyncio
+import html
+import json
+import os
+
 import app.utils as utils
 
-# Add this helper class inside the module
 class FakeShell:
     def __init__(self, logger, db_log_func, peer_ip, src_port=0, dst_port=0, protocol="ssh", username="unknown"):
         self.logger = logger

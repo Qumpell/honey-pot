@@ -3,7 +3,7 @@ from app.db import log_event
 from app.db import query_recent_logs
 from app.utils import now_iso
 import asyncio
-from app.ssh_honeypot import start_ssh_honeypot
+from app.ssh_server import start_ssh_honeypot
 
 
 async def test_db():
