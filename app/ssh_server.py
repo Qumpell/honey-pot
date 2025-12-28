@@ -51,8 +51,6 @@ async def start_ssh_honeypot(port=2222):
 
 
 class HoneySSHServer(asyncssh.SSHServer):
-    """Handles authentication attempts."""
-
     def __init__(self, auth_manager: AuthManager):
         super().__init__()
         self.conn = None

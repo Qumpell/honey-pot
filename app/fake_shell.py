@@ -1,18 +1,21 @@
 import asyncio
 import html
 import json
-import os
 
 import app.utils as utils
+from app.config import HP_PARSED_JSON
+from app.utils import UNKNOWN, SupportedProtocols
+
 
 class FakeShell:
-    def __init__(self, logger, db_log_func, peer_ip, src_port=0, dst_port=0, protocol="ssh", username="unknown"):
+    # def __init__(self, logger, db_log_func, peer_ip, src_port=0, dst_port=0, protocol="ssh", username="unknown"):
+    def __init__(self, logger, username=UNKNOWN):
         self.logger = logger
-        self.log_event = db_log_func
-        self.peer_ip = peer_ip
-        self.src_port = src_port
-        self.dst_port = dst_port
-        self.protocol = protocol
+        # self.log_event = db_log_func
+        # self.peer_ip = peer_ip
+        # self.src_port = src_port
+        # self.dst_port = dst_port
+        # self.protocol = protocol
         self.username = username
         self.cwd = "/home/" + username
         self.env = {"USER": username, "HOME": f"/home/{username}", "SHELL": "/bin/bash"}
@@ -30,73 +33,73 @@ class FakeShell:
             f"/home/{username}/.bash_history": ""
         }
 
-    def _log_cmd(self, raw_cmd, parsed=None, src_port=None, dst_port=None, protocol=None):
-        # log to DB without printing secrets to console
-        if utils.is_blank(raw_cmd):
-            self.logger.debug("[DB] Blank command, not logging")
-            return
-        try:
-            # Timestamp and db logging - make sure db_log_func matches your interface
-                # Build parsed payload optionally as real JSON behind a feature flag
-            try:
-                    parsed_flag = os.environ.get("HP_PARSED_JSON", "1")
-                    if parsed is not None:
-                        parsed_value = parsed
-                    elif parsed_flag in ("1", "true", "True"):
-                        try:
-                            parsed_value = json.dumps({"cmd": raw_cmd, "cwd": self.cwd}, ensure_ascii=False)
-                        except Exception:
-                            # Fallback to simple escaped string if json fails
-                            parsed_value = json.dumps({"cmd": str(raw_cmd)})
-                    else:
-                        parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
-            except Exception:
-                    parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
-
-            # allow caller overrides, else use values from the FakeShell instance
-            sp = src_port if src_port is not None else self.src_port
-            dp = dst_port if dst_port is not None else self.dst_port
-            proto = protocol if protocol is not None else self.protocol
-
-            coro = self.log_event(
-                    timestamp=utils.now_iso(),
-                    src_ip=self.peer_ip,
-                    src_port=sp,
-                    dst_port=dp,
-                    protocol=proto,
-                    event_type="command",
-                    raw=raw_cmd,
-                    parsed=parsed_value,
-                    classification="command",
-                    confidence=0.7,
-                    details="{}",
-                    headers="{}"
-                )
-            # Schedule coroutine instead of calling it directly to avoid
-            # "coroutine was never awaited" warnings and to not block the
-            # current sync caller.
-            try:
-                loop = asyncio.get_running_loop()
-            except Exception:
-                loop = None
-            if loop is not None and loop.is_running():
-                task = loop.create_task(coro)
-                # Attach a callback to surface exceptions from the background task
-                def _on_done(t):
-                    try:
-                        t.result()
-                    except Exception as ex:
-                        self.logger.error("[DB] Background log_event failed: %s", ex)
-
-                task.add_done_callback(_on_done)
-            else:
-                # Best-effort fallback: run it synchronously (rare)
-                try:
-                    asyncio.run(coro)
-                except Exception:
-                    pass
-        except Exception as e:
-            self.logger.error("[DB] Failed to log command: %s", e)
+    # def _log_cmd(self, raw_cmd, parsed=None, src_port=None, dst_port=None, protocol=None):
+    #     # log to DB without printing secrets to console
+    #     if utils.is_blank(raw_cmd):
+    #         self.logger.debug("[DB] Blank command, not logging")
+    #         return
+    #     try:
+    #         # Timestamp and db logging - make sure db_log_func matches your interface
+    #             # Build parsed payload optionally as real JSON behind a feature flag
+    #         try:
+    #                 parsed_flag = HP_PARSED_JSON
+    #                 if parsed is not None:
+    #                     parsed_value = parsed
+    #                 elif parsed_flag in ("1", "true", "True"):
+    #                     try:
+    #                         parsed_value = json.dumps({"cmd": raw_cmd, "cwd": self.cwd}, ensure_ascii=False)
+    #                     except Exception:
+    #                         # Fallback to simple escaped string if json fails
+    #                         parsed_value = json.dumps({"cmd": str(raw_cmd)})
+    #                 else:
+    #                     parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
+    #         except Exception:
+    #                 parsed_value = f'{{"cmd": "{html.escape(raw_cmd)}"}}'
+    #
+    #         # allow caller overrides, else use values from the FakeShell instance
+    #         sp = src_port if src_port is not None else self.src_port
+    #         dp = dst_port if dst_port is not None else self.dst_port
+    #         proto = protocol if protocol is not None else self.protocol
+    #
+    #         coro = self.log_event(
+    #                 timestamp=utils.now_iso(),
+    #                 src_ip=self.peer_ip,
+    #                 src_port=sp,
+    #                 dst_port=dp,
+    #                 protocol=proto,
+    #                 event_type="command",
+    #                 raw=raw_cmd,
+    #                 parsed=parsed_value,
+    #                 classification="command",
+    #                 confidence=0.7,
+    #                 details="{}",
+    #                 headers="{}"
+    #             )
+    #         # Schedule coroutine instead of calling it directly to avoid
+    #         # "coroutine was never awaited" warnings and to not block the
+    #         # current sync caller.
+    #         try:
+    #             loop = asyncio.get_running_loop()
+    #         except Exception:
+    #             loop = None
+    #         if loop is not None and loop.is_running():
+    #             task = loop.create_task(coro)
+    #             # Attach a callback to surface exceptions from the background task
+    #             def _on_done(t):
+    #                 try:
+    #                     t.result()
+    #                 except Exception as ex:
+    #                     self.logger.error("[DB] Background log_event failed: %s", ex)
+    #
+    #             task.add_done_callback(_on_done)
+    #         else:
+    #             # Best-effort fallback: run it synchronously (rare)
+    #             try:
+    #                 asyncio.run(coro)
+    #             except Exception:
+    #                 pass
+    #     except Exception as e:
+    #         self.logger.error("[DB] Failed to log command: %s", e)
 
     def handle_line(self, line):
         line = line.strip()
