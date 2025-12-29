@@ -1,54 +1,15 @@
 import asyncio
-import os
-from pathlib import Path
+
 import asyncssh
+
 from app.auth_manager import AuthManager
-from app.config import MAX_CONCURRENT_SESSIONS, HOST_KEY_PATH
+from app.config import MAX_CONCURRENT_SESSIONS
 from app.db import log_event
 from app.ssh_session import HoneySSHSession
-from app.utils import now_iso, safe_parsed, log
+from app.utils import now_iso, log, EventType, SupportedProtocols, Classification, UNKNOWN, normalize_str
+from app.utils import sanitize_identity, to_json, hash_secret
 
 _CONN_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_SESSIONS)
-
-
-async def ensure_host_key():
-    """Generate SSH host key if it doesn't exist and set safe permissions.
-
-    This function is intentionally forgiving on Windows file permission steps.
-    """
-    path = Path(HOST_KEY_PATH)
-    if not path.exists():
-        log.info(f"[SSH] Generating host key at {path}")
-        os.makedirs(path.parent, exist_ok=True)
-        try:
-            key = asyncssh.generate_private_key('ssh-rsa')
-            # asyncssh key objects expose write_private_key
-            key.write_private_key(str(path))
-            try:
-                # Restrict file permissions when possible
-                os.chmod(path, 0o600)
-            except Exception:
-                # Not critical on Windows
-                pass
-        except Exception as e:
-            log.error(f"[SSH] Failed to generate host key: {e}")
-            raise
-    else:
-        log.info(f"[SSH] Using existing host key: {path}")
-
-
-async def start_ssh_honeypot(port=2222):
-    auth_manager = AuthManager()
-    await ensure_host_key()
-    log.info(f"[SSH] Starting fake SSH server on port {port}...")
-    return await asyncssh.listen(
-        host="0.0.0.0",
-        port=port,
-        server_factory=lambda: HoneySSHServer(auth_manager=auth_manager),
-        server_host_keys=[HOST_KEY_PATH],
-        encoding='utf-8',
-    )
-
 
 class HoneySSHServer(asyncssh.SSHServer):
     def __init__(self, auth_manager: AuthManager):
@@ -59,27 +20,21 @@ class HoneySSHServer(asyncssh.SSHServer):
 
     def connection_made(self, conn):
         self.conn = conn
-        # Acquire a slot for concurrent connections. If the semaphore is
-        # exhausted this will queue — keeping memory bounded.
-        try:
-            # Prefer non-blocking acquire if available
-            acquired = _CONN_SEMAPHORE.acquire_nowait()
-            self._acquired_semaphore = bool(acquired)
-        except AttributeError:
-            # older asyncio may not expose acquire_nowait; schedule an acquire
-            asyncio.create_task(_CONN_SEMAPHORE.acquire())
-            self._acquired_semaphore = True
-        except Exception:
-            # Fallback: schedule an acquire and mark as acquired
-            try:
-                asyncio.create_task(_CONN_SEMAPHORE.acquire())
-                self._acquired_semaphore = True
-            except Exception:
-                self._acquired_semaphore = False
+        if _CONN_SEMAPHORE.locked():
+            log.warning("[SSH] Connection limit reached")
+            conn.close()
+            return
+        asyncio.create_task(self._acquire_semaphore())
+
+    async def _acquire_semaphore(self):
+        await _CONN_SEMAPHORE.acquire()
+        self._acquired_semaphore = True
 
     def begin_auth(self, username):
-        log.info(f"[SSH] begin_auth for username '{username}'")
-        # Returning True forces password or pubkey attempts (even without valid accounts)
+        log.info(
+            "[SSH] begin_auth for username '%s'",
+            sanitize_identity(username),
+        )
         return True
 
     def password_auth_supported(self):
@@ -89,143 +44,120 @@ class HoneySSHServer(asyncssh.SSHServer):
         return True
 
     async def validate_password(self, username, password):
-        # Avoid printing raw secrets to console logs; keep them only in DB.
-        log.info(f"[SSH] Password attempt user='{username}' pass='<redacted>' (len={len(password) if password else 0})")
-        try:
-            peer = self.conn.get_extra_info(f"peername")
-            sock = self.conn.get_extra_info("sockname")
-            await log_event(
-                timestamp=now_iso(),
-                src_ip=peer[0],
-                src_port=peer[1],
-                dst_port=sock[1],
-                protocol="ssh",
-                event_type="auth_attempt",
-                raw=f"{username}:{password}",
-                parsed=safe_parsed({"user": username}),
-                classification="password_guess",
-                confidence=0.9,
-                details='{}',
-                headers='{}'
-            )
-            log.info("[DB] Logged password attempt")
-        except Exception as e:
-            log.error(f"[DB] Failed to log password attempt: {e}")
-
-        # Register the attempt and decide whether to "grant" a fake account
-        try:
-            peer = self.conn.get_extra_info("peername")
-            ip = peer[0]
-        except Exception:
-            ip = "unknown"
-
-        try:
-            granted, attempts, threshold = await self.auth_manager.register_attempt(ip)
-        except Exception:
-            granted = False
-
-        if granted:
-            log.info(f"[SSH] Granting fake shell to {ip} after {attempts}/{threshold} attempts")
-            try:
-                await log_event(
-                    timestamp=now_iso(),
-                    src_ip=ip,
-                    src_port=peer[1] if peer and len(peer) > 1 else 0,
-                    dst_port=sock[1] if sock and len(sock) > 1 else 0,
-                    protocol="ssh",
-                    event_type="auth_granted",
-                    raw=f"{username}:<redacted>",
-                    parsed=safe_parsed({"user": username}),
-                    classification="honeypot_grant",
-                    confidence=1.0,
-                    details='{}',
-                    headers='{}'
-                )
-            except Exception:
-                pass
-            return True
-
-        return False
+        sanitized_username = sanitize_identity(username)
+        password_hash = hash_secret(password)
+        log.info(
+            "[SSH] Password attempt user='%s' pass='<redacted>' (len=%d)",
+            sanitized_username,
+            len(password) if password else 0,
+        )
+        peer = self._get_peer_info()
+        parsed = to_json({
+            "username": sanitized_username,
+            "password_hash": password_hash,
+        })
+        return await self._handle_auth_attempt(
+            peer=peer,
+            event_attempt=EventType.AUTH_ATTEMPT.value,
+            event_granted=EventType.AUTH_GRANTED.value,
+            raw=f"{sanitized_username}:{password_hash}",
+            parsed=parsed,
+            classification_attempt=Classification.PASSWORD_GUESS.value,
+            classification_granted=Classification.HONEYPOT_GRANT.value,
+        )
 
     async def validate_public_key(self, username, key):
-        # asyncssh may return the fingerprint as `str` or `bytes` depending
-        # on versions/encoding. Handle both safely.
         fp = key.get_fingerprint('sha256')
-        if isinstance(fp, bytes):
-            try:
-                fingerprint = fp.decode('utf-8')
-            except Exception:
-                fingerprint = repr(fp)
-        else:
-            fingerprint = str(fp)
-        log.info(f"[SSH] Public key attempt user='{username}' key='{fingerprint}'")
-        try:
-            peer = self.conn.get_extra_info("peername")
-            sock = self.conn.get_extra_info("sockname")
-            await log_event(
-                timestamp=now_iso(),
-                src_ip=peer[0],
-                src_port=peer[1],
-                dst_port=sock[1],
-                protocol="ssh",
-                event_type="auth_attempt_pubkey",
-                raw=fingerprint,
-                parsed=safe_parsed({"user": username}),
-                classification="pubkey_guess",
-                confidence=0.9,
-                details='{"fingerprint_type":"sha256"}',
-                headers="{}"
-            )
-            log.info("[DB] Logged pubkey attempt")
-        except Exception as e:
-            log.error(f"[DB] Failed to log pubkey attempt: {e}")
-        # Register attempt and possibly grant fake shell access
-        try:
-            peer = self.conn.get_extra_info("peername")
-            ip = peer[0]
-        except Exception:
-            ip = "unknown"
+        fingerprint = normalize_str(fp)
+        sanitized_username = sanitize_identity(username)
+        log.info(
+            "[SSH] Public key attempt user='%s' key='%s'",
+            sanitized_username,
+            fingerprint,
+        )
+        peer = self._get_peer_info()
+        parsed = to_json({
+            "username": sanitized_username,
+            "pub_key": fingerprint,
+        })
+        return await self._handle_auth_attempt(
+            peer=peer,
+            event_attempt=EventType.AUTH_ATTEMPT_PUBKEY.value,
+            event_granted=EventType.AUTH_GRANTED_PUBKEY.value,
+            raw=f"{sanitized_username}:{fingerprint}",
+            parsed=parsed,
+            classification_attempt=Classification.PUBKEY_GUESS.value,
+            classification_granted=Classification.HONEYPOT_GRANT.value,
+        )
 
-        try:
-            granted, attempts, threshold = await self.auth_manager.register_attempt(ip)
-        except Exception:
-            granted = False
+    async def _handle_auth_attempt(
+            self,
+            *,
+            peer,
+            event_attempt,
+            event_granted,
+            raw,
+            parsed,
+            classification_attempt,
+            classification_granted,
+            confidence_attempt=0.9,
+    ):
+        await log_event(
+            timestamp=now_iso(),
+            src_ip=peer["ip"],
+            src_port=peer["src_port"],
+            dst_port=peer["dst_port"],
+            protocol=SupportedProtocols.SSH.value,
+            event_type=event_attempt,
+            raw=raw,
+            parsed=parsed,
+            classification=classification_attempt,
+            confidence=confidence_attempt,
+            details="{}",
+            headers="{}",
+        )
 
-        if granted:
-            log.info(f"[SSH] Granting fake shell to {ip} after {attempts}/{threshold} attempts (pubkey)")
-            try:
-                await log_event(
-                    timestamp=now_iso(),
-                    src_ip=ip,
-                    src_port=peer[1] if peer and len(peer) > 1 else 0,
-                    dst_port=sock[1] if sock and len(sock) > 1 else 0,
-                    protocol="ssh",
-                    event_type="auth_granted_pubkey",
-                    raw=fingerprint,
-                    parsed=safe_parsed({"user": username}),
-                    classification="honeypot_grant",
-                    confidence=1.0,
-                    details='{}',
-                    headers='{}'
-                )
-            except Exception:
-                pass
-            return True
+        granted, attempts, threshold = await self.auth_manager.register_attempt(peer["ip"])
+        if not granted:
+            return False
 
-        return False
+        log.info(
+            "[SSH] Granting fake shell to %s after %d/%d attempts",
+            peer["ip"],
+            attempts,
+            threshold,
+        )
+
+        await log_event(
+            timestamp=now_iso(),
+            src_ip=peer["ip"],
+            src_port=peer["src_port"],
+            dst_port=peer["dst_port"],
+            protocol=SupportedProtocols.SSH.value,
+            event_type=event_granted,
+            raw=raw,
+            parsed=parsed,
+            classification=classification_granted,
+            confidence=1.0,
+            details="{}",
+            headers="{}",
+        )
+        return True
+
+    def _get_peer_info(self):
+        peer = self.conn.get_extra_info("peername") or ()
+        sock = self.conn.get_extra_info("sockname") or ()
+        return {
+            "ip": peer[0] if len(peer) > 0 else UNKNOWN,
+            "src_port": peer[1] if len(peer) > 1 else 0,
+            "dst_port": sock[1] if len(sock) > 1 else 0,
+        }
 
     def session_requested(self):
         log.info("[SSH] Shell session requested")
-        # Pass the underlying connection object to the session so it can
-        # access peer information safely.
         return HoneySSHSession(self.conn, auth_manager=self.auth_manager)
 
     def connection_lost(self, exc):
-        # Release the semaphore slot if we acquired it when the connection ends
-        try:
-            if getattr(self, '_acquired_semaphore', False):
-                _CONN_SEMAPHORE.release()
-                self._acquired_semaphore = False
-        except Exception:
-            pass
-
+        if self._acquired_semaphore:
+            _CONN_SEMAPHORE.release()
+            self._acquired_semaphore = False

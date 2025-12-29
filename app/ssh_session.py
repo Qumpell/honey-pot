@@ -89,7 +89,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             src_ip=peer[0],
             src_port=peer[1],
             dst_port=sock[1],
-            protocol="ssh",
+            protocol=SupportedProtocols.SSH.value,
             event_type="command",
             raw=line,
             parsed=safe_parsed({"cmd": line}),
@@ -129,5 +129,5 @@ class HoneySSHSession(asyncssh.SSHServerSession):
                 self._write("Session timed out due to inactivity.\n")
                 self._chan.close()
         except asyncio.CancelledError:
-            log.error(f"[SSH] Should never happen. Session timed out due to inactivity.")
+            log.error(f"[SSH] Session timed out due to inactivity.")
             pass

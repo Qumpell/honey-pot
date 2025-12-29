@@ -4,6 +4,9 @@ import re
 import hashlib
 from datetime import datetime, timezone
 from enum import Enum
+
+from typing_extensions import deprecated
+
 from app.config import HP_PARSED_JSON
 
 
@@ -48,6 +51,7 @@ def now_iso() -> str:
 def is_blank(s :str) -> bool:
     return s is None or s.strip() == ""
 
+#todo to be removed
 def safe_parsed(obj):
     """Return a JSON string for `obj` when HP_PARSED_JSON is enabled.
 
@@ -78,7 +82,7 @@ def safe_parsed(obj):
         except Exception:
             return '{"value":"<error>"}'
 
-def to_json_safe(data):
+def to_json(data):
     try:
         return json.dumps(data, ensure_ascii=False)
     except (TypeError, ValueError):
@@ -86,13 +90,32 @@ def to_json_safe(data):
         return "{}"
 
 def sanitize_input(value: str, max_len: int=1024) -> str:
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        value = str(value)
-
+    value = normalize_str(value)
     value = value[:max_len]
     value = value.replace('\x00', '')
     value = _ANSI_ESCAPE_RE.sub("", value)
     return "".join(c if c.isprintable() else " " for c in value)
+
+def normalize_str(value:object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+def hash_secret(value: str) -> str:
+    if not value:
+        return UNKNOWN
+    return hashlib.blake2b(
+        value.encode("utf-8", errors="ignore"),
+        digest_size=16
+    ).hexdigest()
+
+def sanitize_identity(value: str, max_len=64) -> str:
+    if not value:
+        return UNKNOWN
+    value = value[:max_len]
+    value = value.replace("\x00", "")
+    return "".join(c if c.isprintable() else "_" for c in value)
+
 
