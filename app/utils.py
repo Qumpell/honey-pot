@@ -1,13 +1,9 @@
+import hashlib
 import json
 import logging
 import re
-import hashlib
 from datetime import datetime, timezone
 from enum import Enum
-
-from typing_extensions import deprecated
-
-from app.config import HP_PARSED_JSON
 
 
 class EventType(Enum):
@@ -50,37 +46,6 @@ def now_iso() -> str:
 
 def is_blank(s :str) -> bool:
     return s is None or s.strip() == ""
-
-#todo to be removed
-def safe_parsed(obj):
-    """Return a JSON string for `obj` when HP_PARSED_JSON is enabled.
-
-    If the flag is disabled, return a minimal hand-escaped JSON-like string.
-    This function never raises.
-    """
-    try:
-        flag = HP_PARSED_JSON
-        if flag in ("1", "true", "True"):
-            try:
-                return json.dumps(obj, ensure_ascii=False)
-            except Exception:
-                # fallback to str-wrapped dict
-                return json.dumps({"value": str(obj)})
-        # default: return a simple string representation
-        if isinstance(obj, dict):
-            # make a safe simple representation
-            try:
-                # only include stringified values
-                simple = {k: str(v) for k, v in obj.items()}
-                return json.dumps(simple, ensure_ascii=False)
-            except Exception:
-                return json.dumps({"value": str(obj)})
-        return json.dumps({"value": str(obj)})
-    except Exception:
-        try:
-            return json.dumps({"value": str(obj)})
-        except Exception:
-            return '{"value":"<error>"}'
 
 def to_json(data):
     try:

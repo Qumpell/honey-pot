@@ -5,7 +5,7 @@ import asyncssh
 from app.auth_manager import AuthManager
 from app.config import MAX_CONCURRENT_SESSIONS
 from app.db import log_event
-from app.ssh_session import HoneySSHSession
+from app.ssh.ssh_session import HoneySSHSession
 from app.utils import now_iso, log, EventType, SupportedProtocols, Classification, UNKNOWN, normalize_str
 from app.utils import sanitize_identity, to_json, hash_secret
 
@@ -27,7 +27,15 @@ class HoneySSHServer(asyncssh.SSHServer):
         asyncio.create_task(self._acquire_semaphore())
 
     async def _acquire_semaphore(self):
-        await _CONN_SEMAPHORE.acquire()
+        try:
+            await _CONN_SEMAPHORE.acquire()
+        except asyncio.CancelledError:
+            return
+
+        if self.conn.is_closing():
+            _CONN_SEMAPHORE.release()
+            log.debug("[SSH] Connection closed while waiting for semaphore - Released")
+            return
         self._acquired_semaphore = True
 
     def begin_auth(self, username):

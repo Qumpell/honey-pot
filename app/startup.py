@@ -5,28 +5,24 @@ import asyncssh
 
 from app.auth_manager import AuthManager
 from app.config import HOST_KEY_PATH
-from app.ssh_server import HoneySSHServer
+from app.ssh.ssh_server import HoneySSHServer
 from app.utils import log
 
 
 async def ensure_host_key():
     path = Path(HOST_KEY_PATH)
-    if not path.exists():
-        log.info(f"[SSH] Generating host key at {path}")
-        os.makedirs(path.parent, exist_ok=True)
-        try:
-            key = asyncssh.generate_private_key('ssh-rsa')
-            key.write_private_key(str(path))
-            try:
-                os.chmod(path, 0o600)
-            except Exception:
-                pass
-        except Exception as e:
-            log.error(f"[SSH] Failed to generate host key: {e}")
-            raise
-    else:
+    if path.exists():
         log.info(f"[SSH] Using existing host key: {path}")
+        return
+    log.info(f"[SSH] Generating host key at {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
 
+    key = asyncssh.generate_private_key('ssh-rsa')
+    key.write_private_key(str(path))
+    try:
+        os.chmod(path, 0o600)
+    except PermissionError:
+        log.warning(f"[SSH] Could not restrict permissions on {path}, skipping chmod")
 
 async def start_ssh_honeypot(port=2222):
     auth_manager = AuthManager()
