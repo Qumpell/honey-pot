@@ -9,7 +9,7 @@ from app.ssh.ssh_session import HoneySSHSession
 from app.utils import now_iso, log, EventType, SupportedProtocols, Classification, UNKNOWN, normalize_str
 from app.utils import sanitize_identity, to_json, hash_secret
 
-_CONN_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_SESSIONS)
+_CONN_SEMAPHORE = asyncio.BoundedSemaphore(MAX_CONCURRENT_SESSIONS)
 
 class HoneySSHServer(asyncssh.SSHServer):
     def __init__(self, auth_manager: AuthManager):
