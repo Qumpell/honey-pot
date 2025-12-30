@@ -6,6 +6,7 @@ import asyncssh
 from app.auth_manager import AuthManager
 from app.config import HOST_KEY_PATH
 from app.ssh.ssh_server import HoneySSHServer
+from app.telnet.telnet_server import HoneyTelnetServer
 from app.utils import log
 
 
@@ -35,3 +36,10 @@ async def start_ssh_honeypot(port=2222):
         server_host_keys=[HOST_KEY_PATH],
         encoding='utf-8',
     )
+
+async def start_telnet_honeypot(port=23):
+    auth_manager = AuthManager()
+    log.info(f"[TELNET] Starting fake Telnet server on port {port}...")
+    server = HoneyTelnetServer(auth_manager=auth_manager)
+    await server.start(host="0.0.0.0", port=port)
+    return server

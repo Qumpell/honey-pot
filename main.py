@@ -3,7 +3,7 @@ from app.db import log_event
 from app.db import query_recent_logs
 from app.utils import now_iso
 import asyncio
-from app.startup import start_ssh_honeypot
+from app.startup import start_ssh_honeypot, start_telnet_honeypot
 
 
 async def test_db():
@@ -34,8 +34,9 @@ async def main():
     await init_db()
 
     ssh_server = await start_ssh_honeypot(port=2222)
+    telnet_server = await start_telnet_honeypot(port=2223)
 
-    print("Honeypot running. Press Ctrl+C to stop.")
+    print("Honeypot running. SSH on port 2222, Telnet on port 2223. Press Ctrl+C to stop.")
     try:
         await asyncio.Future()
     except KeyboardInterrupt:
@@ -43,6 +44,7 @@ async def main():
     finally:
         ssh_server.close()
         await ssh_server.wait_closed()
+        await telnet_server.stop()
         await close_db()
 
 
