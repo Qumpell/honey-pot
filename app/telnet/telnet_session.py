@@ -2,10 +2,11 @@ import asyncio
 import codecs
 
 from app.auth_manager import AuthManager
-from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT
+from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT, BRUTE_MAX
 from app.db import log_event
 from app.fake_shell import FakeShell
-from app.utils import now_iso, log, sanitize_input, EventType, UNKNOWN, SupportedProtocols, to_json, sanitize_identity, hash_secret, Classification
+from app.utils import now_iso, log, sanitize_input, EventType, SupportedProtocols, to_json, sanitize_identity, \
+    hash_secret, Classification, process_telnet_data
 
 
 class HoneyTelnetAuthHandler:
@@ -43,15 +44,13 @@ class HoneyTelnetAuthHandler:
         )
 
         granted, attempts, threshold = await self.auth_manager.register_attempt(self.peer_info["ip"])
-        if not granted:
-            return False
-
-        log.info(
-            "[TELNET] Granting fake shell to %s after %d/%d attempts",
-            self.peer_info["ip"],
-            attempts,
-            threshold,
-        )
+        if granted:
+            log.info(
+                "[TELNET] Granting fake shell to %s after %d/%d attempts",
+                self.peer_info["ip"],
+                attempts,
+                threshold,
+            )
 
         await log_event(
             timestamp=now_iso(),
@@ -84,10 +83,7 @@ class HoneyTelnetSession:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
         self.shell = None
         self._prompt = ""
-        self._process_lock = asyncio.Lock()
-
-        self._authenticated = False
-        self._login_state = "username"  # username, password, authenticated
+        self._closed = False
 
     def _reset_idle_timeout(self):
         if self._idle_task and not self._idle_task.done():
@@ -97,29 +93,33 @@ class HoneyTelnetSession:
     async def _idle_watchdog(self):
         try:
             await asyncio.sleep(SESSION_IDLE_TIMEOUT)
-            # await self._write("\r\nSession timed out. Closing connection.\r\n")
             self._write("\r\nSession timed out. Closing connection.\r\n")
-            self.writer.close()
-            await self.writer.wait_closed()
+            if not self.writer.is_closing():
+                # self.writer.close()
+                # await self.writer.wait_closed()
+                await self._close()
             log.info(f"[TELNET] Connection closed by watchdog for {self.peer_info['ip']}")
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            log.error(f"[TELNET] Watchdog error: {e}")
 
     def _write(self, text: str):
         if not self.writer.is_closing():
-            # Telnet uses CRLF
-            self.writer.write(text.replace("\n", "\r\n").encode('utf-8'))
+            data = text.replace("\n", "\r\n").encode('utf-8')
+            self.writer.write(data)
+
 
     async def _read_line(self):
-        """Read a line from the Telnet connection"""
         while True:
             try:
-                data = await asyncio.wait_for(self.reader.read(1024), timeout=1.0)
+                data = await self.reader.read(1024)
                 if not data:
-                    return None  # Connection closed
+                    return None
 
                 self._reset_idle_timeout()
-                decoded = self._decoder.decode(data)
+                clean_data = process_telnet_data(data)
+                decoded = self._decoder.decode(clean_data)
                 self._buffer += decoded
 
                 if "\n" in self._buffer or "\r" in self._buffer:
@@ -128,43 +128,42 @@ class HoneyTelnetSession:
                     line = lines[0] if lines else ""
                     return line.strip()
 
-            except asyncio.TimeoutError:
-                continue
+            except ConnectionResetError:
+                return None
             except Exception as e:
                 log.error(f"[TELNET] Read error: {e}")
                 return None
 
     async def _handle_login(self):
-        """Handle Telnet login process"""
-        self._write("login: ")
-        username = await self._read_line()
-        if username is None:
-            return False
+        for _ in range(BRUTE_MAX):
+            self._write("login: ")
+            username = await self._read_line()
+            if username is None:
+                return False
 
-        username = sanitize_input(username, 64)
-        if not username:
-            return False
+            username = sanitize_input(username, 64)
+            if not username:
+                continue
 
-        self._write("Password: ")
-        password = await self._read_line()
-        if password is None:
-            return False
+            self._write("Password: ")
+            password = await self._read_line()
+            if password is None:
+                return False
 
-        # Authenticate
-        authenticated = await self.auth_handler.authenticate(username, password)
-        if not authenticated:
+            await self.auth_handler.authenticate(username, password)
+
+            if self.auth_manager.is_granted(self.peer_info["ip"]):
+                self.shell = FakeShell(log, username=username)
+                self._prompt = f"{username}@fakehost:{self.shell.cwd}$ "
+                self._write("\r\nWelcome to Fake Honeypot Shell\r\n")
+                self._write(self._prompt)
+                return True
+
             self._write("\r\nLogin incorrect\r\n")
-            return False
 
-        # Setup shell
-        self.shell = FakeShell(log, username=username)
-        self._prompt = f"{username}@fakehost:{self.shell.cwd}$ "
-        self._write("\r\nWelcome to Fake Honeypot Shell\r\n")
-        self._write(self._prompt)
-        return True
+        return False
 
     async def _handle_command(self, line: str):
-        """Handle a shell command"""
         line = sanitize_input(line.strip().replace("\r", ""), MAX_COMMAND_LENGTH)
         if not line:
             self._write(self._prompt)
@@ -174,10 +173,10 @@ class HoneyTelnetSession:
         log.info(f"[TELNET] Command received (len={len(line)} count={self._cmd_count})")
 
         if self._cmd_count > MAX_COMMANDS_PER_SESSION:
+            # self._cmd_count = MAX_COMMANDS_PER_SESSION
             self._write("\r\nSession command limit reached. Goodbye.\r\n")
             return False
 
-        # Log command
         await log_event(
             timestamp=now_iso(),
             src_ip=self.peer_info["ip"],
@@ -193,11 +192,10 @@ class HoneyTelnetSession:
             headers="{}",
         )
 
-        # Process command
         res = self.shell.handle_line(line)
 
         if res == "__EXIT__":
-            await self._write("\r\nlogout\r\n")
+            self._write("\r\nlogout\r\n")
             return False
 
         if res:
@@ -206,20 +204,18 @@ class HoneyTelnetSession:
         return True
 
     async def run(self):
-        """Main session loop"""
         self._reset_idle_timeout()
 
         try:
-            # Handle login
             if not await self._handle_login():
                 return
 
-            # Main command loop
             while True:
                 line = await self._read_line()
                 if line is None:
                     break
 
+                self._write(line + "\n")
                 continue_session = await self._handle_command(line)
                 if not continue_session:
                     break
@@ -230,5 +226,16 @@ class HoneyTelnetSession:
             if self._idle_task and not self._idle_task.done():
                 self._idle_task.cancel()
             if not self.writer.is_closing():
-                self.writer.close()
+                await self._close()
+
+    async def _close(self):
+        if self._closed:
+            return
+        self._closed = True
+
+        if not self.writer.is_closing():
+            self.writer.close()
+            try:
                 await self.writer.wait_closed()
+            except ConnectionResetError:
+                pass

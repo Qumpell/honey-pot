@@ -1,12 +1,9 @@
 import asyncio
-import codecs
 
 from app.auth_manager import AuthManager
 from app.config import MAX_CONCURRENT_SESSIONS
-from app.db import log_event
-from app.telnet.telnet_session import HoneyTelnetSession, HoneyTelnetAuthHandler
-from app.utils import now_iso, log, EventType, SupportedProtocols, Classification, UNKNOWN, normalize_str
-from app.utils import sanitize_identity, to_json, hash_secret
+from app.telnet.telnet_session import HoneyTelnetSession
+from app.utils import log, UNKNOWN
 
 _CONN_SEMAPHORE = asyncio.BoundedSemaphore(MAX_CONCURRENT_SESSIONS)
 
@@ -31,7 +28,33 @@ class HoneyTelnetServer:
         if self.server:
             self.server.close()
             await self.server.wait_closed()
+            if not self.sessions:
+                log.info("[TELNET] Server stopped (no active sessions)")
+                return
+            log.info(f"[TELNET] Closing {len(self.sessions)} active sessions...")
+
+            closing_tasks = []
+            for session in list(self.sessions):
+                if not session.writer.is_closing():
+                    session.writer.close()
+                    closing_tasks.append(session.writer.wait_closed())
+
+            if closing_tasks:
+                try:
+                    await asyncio.wait_for(asyncio.gather(*closing_tasks, return_exceptions=True), timeout=5.0)
+                except asyncio.TimeoutError:
+                    log.warning("[TELNET] Some sessions did not close gracefully in time")
+
             log.info("[TELNET] Server stopped")
+
+            # log.info(f"[TELNET] Closing {len(self.sessions)} active sessions...")
+            # for session in list(self.sessions):
+            #     try:
+            #         if not session.writer.is_closing():
+            #             session.writer.close()
+            #     except Exception:
+            #         pass
+            # log.info("[TELNET] Server stopped")
 
     async def _handle_connection(self, reader, writer):
         if _CONN_SEMAPHORE.locked():
@@ -40,7 +63,16 @@ class HoneyTelnetServer:
             await writer.wait_closed()
             return
 
-        await _CONN_SEMAPHORE.acquire()
+        try:
+            await _CONN_SEMAPHORE.acquire()
+        except asyncio.CancelledError:
+            writer.close()
+            return
+
+        if writer.is_closing():
+            _CONN_SEMAPHORE.release()
+            log.debug("[TELNET] Connection closed while waiting for semaphore")
+            return
 
         peer = writer.get_extra_info("peername")
         sock = writer.get_extra_info("sockname")
