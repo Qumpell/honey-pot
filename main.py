@@ -3,6 +3,7 @@ import sys
 from app.db import init_db, close_db
 from app.db import log_event
 from app.db import query_recent_logs
+from app.ssh.ssh_server import HoneySSHServer
 from app.utils import now_iso, log
 import asyncio
 from app.startup import start_ssh_honeypot, start_telnet_honeypot
@@ -45,6 +46,7 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop_event.set)
+            loop.add_signal_handler(sig, lambda: stop_event.set())
         except NotImplementedError:
             pass
 
@@ -60,6 +62,7 @@ async def main():
             log.error(f"Telnet stop error: {e}")
 
         try:
+            await HoneySSHServer.close_all_sessions()
             ssh_server.close()
             await asyncio.wait_for(ssh_server.wait_closed(), timeout=3.0)
         except Exception as e:

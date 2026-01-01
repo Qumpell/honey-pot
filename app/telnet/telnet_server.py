@@ -25,27 +25,30 @@ class HoneyTelnetServer:
         return self.server
 
     async def stop(self):
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-            if not self.sessions:
-                log.info("[TELNET] Server stopped (no active sessions)")
-                return
-            log.info(f"[TELNET] Closing {len(self.sessions)} active sessions...")
-
-            closing_tasks = []
+        if not self.server:
+            return
+        log.info("[TELNET] Stopping server and closing sessions...")
+        self.server.close()
+        if self.sessions:
+            log.info(f"[TELNET] Force-closing {len(self.sessions)} active sessions...")
             for session in list(self.sessions):
-                if not session.writer.is_closing():
+                if session.writer and not session.writer.is_closing():
                     session.writer.close()
-                    closing_tasks.append(session.writer.wait_closed())
-
-            if closing_tasks:
-                try:
-                    await asyncio.wait_for(asyncio.gather(*closing_tasks, return_exceptions=True), timeout=5.0)
-                except asyncio.TimeoutError:
-                    log.warning("[TELNET] Some sessions did not close gracefully in time")
-
-            log.info("[TELNET] Server stopped")
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        *[s.writer.wait_closed() for s in self.sessions if s.writer],
+                        return_exceptions=True
+                    ),
+                    timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                log.warning("[TELNET] Some sessions did not close in time, proceeding to shutdown")
+        try:
+            await asyncio.wait_for(self.server.wait_closed(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
+        log.info("[TELNET] Server stopped")
 
     async def _handle_connection(self, reader, writer):
         if _CONN_SEMAPHORE.locked():

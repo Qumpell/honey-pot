@@ -12,6 +12,8 @@ from app.utils import sanitize_identity, to_json, hash_secret
 _CONN_SEMAPHORE = asyncio.BoundedSemaphore(MAX_CONCURRENT_SESSIONS)
 
 class HoneySSHServer(asyncssh.SSHServer):
+    _all_connections = set()
+
     def __init__(self, auth_manager: AuthManager):
         super().__init__()
         self.conn = None
@@ -20,6 +22,7 @@ class HoneySSHServer(asyncssh.SSHServer):
 
     def connection_made(self, conn):
         self.conn = conn
+        HoneySSHServer._all_connections.add(conn)
         if _CONN_SEMAPHORE.locked():
             log.warning("[SSH] Connection limit reached")
             conn.close()
@@ -168,6 +171,16 @@ class HoneySSHServer(asyncssh.SSHServer):
         return HoneySSHSession(self.conn, auth_manager=self.auth_manager)
 
     def connection_lost(self, exc):
+        HoneySSHServer._all_connections.discard(self.conn)
         if self._acquired_semaphore:
             _CONN_SEMAPHORE.release()
             self._acquired_semaphore = False
+
+    @classmethod
+    async def close_all_sessions(cls):
+        if not cls._all_connections:
+            return
+        log.info(f"[SSH] Force-closing {len(cls._all_connections)} sessions...")
+        for conn in list(cls._all_connections):
+            conn.close()
+        await asyncio.gather(*[c.wait_closed() for c in cls._all_connections], return_exceptions=True)
