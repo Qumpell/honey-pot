@@ -47,15 +47,6 @@ class HoneyTelnetServer:
 
             log.info("[TELNET] Server stopped")
 
-            # log.info(f"[TELNET] Closing {len(self.sessions)} active sessions...")
-            # for session in list(self.sessions):
-            #     try:
-            #         if not session.writer.is_closing():
-            #             session.writer.close()
-            #     except Exception:
-            #         pass
-            # log.info("[TELNET] Server stopped")
-
     async def _handle_connection(self, reader, writer):
         if _CONN_SEMAPHORE.locked():
             log.warning("[TELNET] Connection limit reached")

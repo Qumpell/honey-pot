@@ -1,9 +1,14 @@
+import sys
+
 from app.db import init_db, close_db
 from app.db import log_event
 from app.db import query_recent_logs
-from app.utils import now_iso
+from app.utils import now_iso, log
 import asyncio
 from app.startup import start_ssh_honeypot, start_telnet_honeypot
+import signal
+
+shutdown_event = asyncio.Event()
 
 
 async def test_db():
@@ -29,27 +34,44 @@ async def test_db():
         print("\nDone. Closing DB...")
         await close_db()
 
-
 async def main():
     await init_db()
-
     ssh_server = await start_ssh_honeypot(port=2222)
     telnet_server = await start_telnet_honeypot(port=2223)
+    log.info("Honeypot running. SSH on 2222, Telnet on 2223. Ctrl+C to stop.")
 
-    print("Honeypot running. SSH on port 2222, Telnet on port 2223. Press Ctrl+C to stop.")
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            pass
+
     try:
-        await asyncio.Future()
-    except KeyboardInterrupt:
-        print("Stopping...")
+        await stop_event.wait()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
     finally:
-        ssh_server.close()
-        await ssh_server.wait_closed()
-        await telnet_server.stop()
+        log.info("\n[SHUTDOWN] Stopping servers...")
+        try:
+            await asyncio.wait_for(telnet_server.stop(), timeout=3.0)
+        except Exception as e:
+            log.error(f"Telnet stop error: {e}")
+
+        try:
+            ssh_server.close()
+            await asyncio.wait_for(ssh_server.wait_closed(), timeout=3.0)
+        except Exception as e:
+            log.error(f"SSH stop error: {e}")
+
         await close_db()
+        print("[SHUTDOWN] Cleanup complete. Exit.")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Interrupted by user")
+        sys.exit(0)
+

@@ -29,14 +29,16 @@ class HoneySSHServer(asyncssh.SSHServer):
     async def _acquire_semaphore(self):
         try:
             await _CONN_SEMAPHORE.acquire()
-        except asyncio.CancelledError:
-            return
+            if self.conn.is_closed():
+                log.debug("[SSH] Connection closed while waiting for semaphore - Released")
+                _CONN_SEMAPHORE.release()
+                return
 
-        if self.conn.is_closing():
-            _CONN_SEMAPHORE.release()
-            log.debug("[SSH] Connection closed while waiting for semaphore - Released")
-            return
-        self._acquired_semaphore = True
+            self._acquired_semaphore = True
+        except Exception as e:
+            log.error(f"[SSH] Error in semaphore acquisition: {e}")
+            if not self.conn.is_closed():
+                self.conn.close()
 
     def begin_auth(self, username):
         log.info(
