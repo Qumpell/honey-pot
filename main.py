@@ -1,10 +1,11 @@
 import sys
 
-from app.db import init_db, close_db
+from app.db import init_db, close_db, set_stats_manager
 from app.db import log_event
 from app.db import query_recent_logs
 from app.ssh.ssh_server import HoneySSHServer
-from app.utils import now_iso, log
+from app.stats import StatsManager
+from app.utils import now_iso, log, SupportedProtocols, EventType, Classification
 import asyncio
 from app.startup import start_ssh_honeypot, start_telnet_honeypot
 import signal
@@ -18,9 +19,9 @@ async def test_db():
         await init_db()
         ts = now_iso()
         await log_event(ts, src_ip="127.0.0.1", src_port=55555, dst_port=2222,
-                        protocol="ssh", event_type="auth_attempt",
+                        protocol=SupportedProtocols.SSH, event_type=EventType.AUTH_ATTEMPT,
                         raw="root:password123", parsed='{"user":"root"}',
-                        classification="brute_force", confidence=0.9,
+                        classification=Classification.PASSWORD_GUESS, confidence=0.9,
                         details='{"failed_attempts": 12}', headers="{}")
 
         rows = await query_recent_logs(20)
@@ -37,6 +38,11 @@ async def test_db():
 
 async def main():
     await init_db()
+    stats = StatsManager()
+    await stats.load_today_stats()
+    set_stats_manager(stats)
+    asyncio.create_task(stats.run_background_saver(interval=30))
+
     ssh_server = await start_ssh_honeypot(port=2222)
     telnet_server = await start_telnet_honeypot(port=2223)
     log.info("Honeypot running. SSH on 2222, Telnet on 2223. Ctrl+C to stop.")
@@ -67,6 +73,12 @@ async def main():
             await asyncio.wait_for(ssh_server.wait_closed(), timeout=3.0)
         except Exception as e:
             log.error(f"SSH stop error: {e}")
+
+        log.info("[SHUTDOWN] Flushing final stats to database...")
+        try:
+            await stats.flush()
+        except Exception as e:
+            log.error(f"Final stats flush error: {e}")
 
         await close_db()
         print("[SHUTDOWN] Cleanup complete. Exit.")

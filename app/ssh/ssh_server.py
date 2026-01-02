@@ -71,12 +71,12 @@ class HoneySSHServer(asyncssh.SSHServer):
         })
         return await self._handle_auth_attempt(
             peer=peer,
-            event_attempt=EventType.AUTH_ATTEMPT.value,
-            event_granted=EventType.AUTH_GRANTED.value,
+            event_attempt=EventType.AUTH_ATTEMPT,
+            event_granted=EventType.AUTH_GRANTED,
             raw=f"{sanitized_username}:{password_hash}",
             parsed=parsed,
-            classification_attempt=Classification.PASSWORD_GUESS.value,
-            classification_granted=Classification.HONEYPOT_GRANT.value,
+            classification_attempt=Classification.PASSWORD_GUESS,
+            classification_granted=Classification.HONEYPOT_GRANT,
         )
 
     async def validate_public_key(self, username, key):
@@ -95,12 +95,12 @@ class HoneySSHServer(asyncssh.SSHServer):
         })
         return await self._handle_auth_attempt(
             peer=peer,
-            event_attempt=EventType.AUTH_ATTEMPT_PUBKEY.value,
-            event_granted=EventType.AUTH_GRANTED_PUBKEY.value,
+            event_attempt=EventType.AUTH_ATTEMPT_PUBKEY,
+            event_granted=EventType.AUTH_GRANTED_PUBKEY,
             raw=f"{sanitized_username}:{fingerprint}",
             parsed=parsed,
-            classification_attempt=Classification.PUBKEY_GUESS.value,
-            classification_granted=Classification.HONEYPOT_GRANT.value,
+            classification_attempt=Classification.PUBKEY_GUESS,
+            classification_granted=Classification.HONEYPOT_GRANT,
         )
 
     async def _handle_auth_attempt(
@@ -120,7 +120,7 @@ class HoneySSHServer(asyncssh.SSHServer):
             src_ip=peer["ip"],
             src_port=peer["src_port"],
             dst_port=peer["dst_port"],
-            protocol=SupportedProtocols.SSH.value,
+            protocol=SupportedProtocols.SSH,
             event_type=event_attempt,
             raw=raw,
             parsed=parsed,
@@ -146,7 +146,7 @@ class HoneySSHServer(asyncssh.SSHServer):
             src_ip=peer["ip"],
             src_port=peer["src_port"],
             dst_port=peer["dst_port"],
-            protocol=SupportedProtocols.SSH.value,
+            protocol=SupportedProtocols.SSH,
             event_type=event_granted,
             raw=raw,
             parsed=parsed,

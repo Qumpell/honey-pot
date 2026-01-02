@@ -5,6 +5,9 @@ from typing import Optional, Dict
 
 import aiosqlite
 
+from app.stats import StatsManager
+from app.utils import Classification, EventType, SupportedProtocols
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("HP_DB_PATH", os.path.join(BASE_DIR, "..", "data", "honeypot.db"))
 SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "..", "schema.sql")
@@ -12,6 +15,11 @@ SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "..", "schema.sql")
 _DB_CONN: Optional[aiosqlite.Connection] = None
 _DB_LOCK = asyncio.Lock()
 
+_STATS_MANAGER: Optional['StatsManager'] = None
+
+def set_stats_manager(manager):
+    global _STATS_MANAGER
+    _STATS_MANAGER = manager
 
 SQLITE_PRAGMAS = [
     ("journal_mode", "WAL"),
@@ -24,7 +32,7 @@ async def _apply_pragmas(conn: aiosqlite.Connection):
     for k, v in SQLITE_PRAGMAS:
         await conn.execute(f"PRAGMA {k} = {v}")
     await conn.commit()
-    
+
 async def init_db(db_path: str = DB_PATH):
     global _DB_CONN
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -84,14 +92,18 @@ async def log_event(timestamp: str,
                     src_ip: str,
                     src_port: int,
                     dst_port: int,
-                    protocol: str,
-                    event_type: str,
+                    protocol: SupportedProtocols,
+                    event_type: EventType,
                     raw: str,
                     parsed: str = "",
-                    classification: str = "unknown",
+                    classification: Classification = Classification.UNKNOWN,
                     confidence: float = 0.0,
                     details: str = "{}",
                     headers: str = "{}"):
+
+    classification_str = classification.value
+    protocol_str = protocol.value
+    event_type_str = event_type.value
     global _DB_CONN
     if _DB_CONN is None:
         await init_db()
@@ -104,10 +116,13 @@ async def log_event(timestamp: str,
              raw, parsed, classification, confidence, details, headers)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            timestamp, day, src_ip, src_port, dst_port, protocol, event_type,
-            raw, parsed, classification, confidence, details, headers
+            timestamp, day, src_ip, src_port, dst_port, protocol_str, event_type_str,
+            raw, parsed, classification_str, confidence, details, headers
         ))
         await _DB_CONN.commit()
+
+    if _STATS_MANAGER:
+        asyncio.create_task(_STATS_MANAGER.register_event(classification_str))
         
 async def upsert_daily_summary(day: str,
                                counts: Dict[str, int],
@@ -170,3 +185,24 @@ async def query_logs_by_type(event_type: str, limit: int = 100):
         res = [dict(zip(cols, row)) for row in rows]
         await cur.close()
         return res
+
+async def get_daily_summary(day: str):
+    global _DB_CONN
+    if _DB_CONN is None:
+        await init_db()
+
+    async with _DB_LOCK:
+        async with _DB_CONN.execute(
+                "SELECT total_events, by_class, first_seen, last_seen FROM daily_summary WHERE day = ?",
+                (day,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "total": row[0],
+                    "counts": json.loads(row[1]),
+                    "first_seen": row[2],
+                    "last_seen": row[3]
+                }
+    return None
+

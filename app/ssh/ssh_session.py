@@ -7,7 +7,7 @@ from app.auth_manager import AuthManager
 from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT
 from app.db import log_event
 from app.fake_shell import FakeShell
-from app.utils import now_iso, log, sanitize_input, EventType, UNKNOWN, SupportedProtocols, to_json
+from app.utils import now_iso, log, sanitize_input, EventType, UNKNOWN, SupportedProtocols, to_json, Classification
 
 
 class HoneySSHSession(asyncssh.SSHServerSession):
@@ -93,11 +93,11 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             src_ip=peer["ip"],
             src_port=peer["src_port"],
             dst_port=peer["dst_port"],
-            protocol=SupportedProtocols.SSH.value,
-            event_type=EventType.COMMAND.value,
+            protocol=SupportedProtocols.SSH,
+            event_type=EventType.COMMAND,
             raw=line,
             parsed=to_json({"cmd": line}),
-            classification=EventType.COMMAND.value,
+            classification=Classification.COMMAND_EXEC,
             confidence=0.7,
             details="{}",
             headers="{}",
