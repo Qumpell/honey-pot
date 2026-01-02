@@ -5,12 +5,9 @@ from typing import Optional, Dict
 
 import aiosqlite
 
+from app.config import SCHEMA_FILE, DB_PATH
 from app.stats import StatsManager
 from app.utils import Classification, EventType, SupportedProtocols
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("HP_DB_PATH", os.path.join(BASE_DIR, "..", "data", "honeypot.db"))
-SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "..", "schema.sql")
 
 _DB_CONN: Optional[aiosqlite.Connection] = None
 _DB_LOCK = asyncio.Lock()
