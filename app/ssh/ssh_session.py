@@ -47,6 +47,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
         self._reset_idle_timeout()
         if isinstance(data, bytes):
             if data == b'\x03':
+                self._prompt = self.shell.get_prompt()
                 self._write("^C\r\n" + self._prompt)
                 self._buffer = ""
                 return
@@ -115,6 +116,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
 
         if res:
             self._write(res)
+        self._prompt = self.shell.get_prompt()
         self._write(self._prompt)
 
     def _write(self, text: str):
@@ -131,7 +133,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             return False
 
         self.shell = FakeShell(log, username=username)
-        self._prompt = f"\033[01;32m{username}@ubuntu\033[00m:\033[01;34m{self.shell.cwd}\033[00m$ "
+        self._prompt = self.shell.get_prompt()
         banner = (
             "\r\nWelcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-89-generic x86_64)\r\n\r\n"
             " * Documentation:  https://help.ubuntu.com\r\n"

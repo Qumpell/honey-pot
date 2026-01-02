@@ -127,12 +127,14 @@ class HoneyTelnetSession:
                 if data == b'\xff':
                     ret = await self._handle_telnet_iac(echo)
                     if ret == "__CTRL_C__":
-                        return "" # Pusta linia = nowy prompt
+                        return ""
                     continue
 
                 # B. Ctrl+C
                 if data == b'\x03':
-                    if echo: self._write("^C\r\n")
+                    if echo:
+                        self._prompt = self.shell.get_prompt()
+                        self._write("^C\r\n" + self._prompt)
                     return ""
 
                 # C. Arrows
@@ -175,7 +177,7 @@ class HoneyTelnetSession:
 
             if self.auth_manager.is_granted(self.peer_info["ip"]):
                 self.shell = FakeShell(log, username=username)
-                self._prompt = f"\033[01;32m{username}@ubuntu\033[00m:\033[01;34m{self.shell.cwd}\033[00m$ "
+                self._prompt = self.shell.get_prompt()
                 self._write("\r\nWelcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-89-generic x86_64)\r\n\r\n")
                 self._write(" * Documentation:  https://help.ubuntu.com\r\n")
                 self._write(" * Management:     https://landscape.canonical.com\r\n")
@@ -191,6 +193,7 @@ class HoneyTelnetSession:
     async def _handle_command(self, line: str):
         line = sanitize_input(line.strip().replace("\r", ""), MAX_COMMAND_LENGTH)
         if not line:
+            self._prompt = self.shell.get_prompt()
             self._write(self._prompt)
             return True
 
@@ -222,6 +225,7 @@ class HoneyTelnetSession:
             self._write("\r\nlogout\r\n")
             return False
 
+        self._prompt = self.shell.get_prompt()
         if res:
             self._write(res)
         self._write(self._prompt)
@@ -330,7 +334,9 @@ class HoneyTelnetSession:
         try:
             cmd = await self.reader.read(1)
             if cmd == b'\xf4':
-                if echo: self._write("^C\r\n")
+                if echo:
+                    self._prompt = self.shell.get_prompt()
+                    self._write("^C\r\n" + self._prompt)
                 return "__CTRL_C__"
 
             if cmd in (b'\xfb', b'\xfc', b'\xfd', b'\xfe'):
