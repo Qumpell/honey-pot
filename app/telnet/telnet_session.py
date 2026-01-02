@@ -6,7 +6,7 @@ from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDL
 from app.db import log_event
 from app.fake_shell import FakeShell
 from app.utils import now_iso, log, sanitize_input, EventType, SupportedProtocols, to_json, sanitize_identity, \
-    hash_secret, Classification, process_telnet_data
+    hash_secret, Classification
 
 
 class HoneyTelnetAuthHandler:
@@ -79,7 +79,7 @@ class HoneyTelnetSession:
 
         self._cmd_count = 0
         self._idle_task = None
-        self._buffer = ""
+        # self._buffer = ""
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
         self.shell = None
         self._prompt = ""
@@ -95,8 +95,6 @@ class HoneyTelnetSession:
             await asyncio.sleep(SESSION_IDLE_TIMEOUT)
             self._write("\r\nSession timed out. Closing connection.\r\n")
             if not self.writer.is_closing():
-                # self.writer.close()
-                # await self.writer.wait_closed()
                 await self._close()
             log.info(f"[TELNET] Connection closed by watchdog for {self.peer_info['ip']}")
         except asyncio.CancelledError:
@@ -109,27 +107,46 @@ class HoneyTelnetSession:
             data = text.replace("\n", "\r\n").encode('utf-8')
             self.writer.write(data)
 
-
-    async def _read_line(self):
+    async def _read_line(self, echo=True):
+        line_buffer = ""
         while True:
             try:
-                data = await self.reader.read(1024)
+                data = await self.reader.read(1)
                 if not data:
                     return None
 
                 self._reset_idle_timeout()
-                clean_data = process_telnet_data(data)
-                decoded = self._decoder.decode(clean_data)
-                self._buffer += decoded
 
-                if "\n" in self._buffer or "\r" in self._buffer:
-                    lines = self._buffer.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-                    self._buffer = lines.pop()
-                    line = lines[0] if lines else ""
-                    return line.strip()
+                if data in (b'\x08', b'\x7f'):
+                    line_buffer = self._handle_backspace(line_buffer, echo)
+                    continue
+                if data in (b'\r', b'\n'):
+                    if data == b'\r':
+                        try:
+                            next_byte = await asyncio.wait_for(self.reader.read(1), timeout=0.01)
+                            if next_byte != b'\n' and next_byte:
+                                pass
+                        except asyncio.TimeoutError:
+                            pass
 
-            except ConnectionResetError:
-                return None
+                    if echo:
+                        self._write("\r\n")
+                    return line_buffer
+
+                if data == b'\xff':
+                    await self.reader.read(2)
+                    continue
+
+                try:
+                    char = data.decode('utf-8')
+                    if char.isprintable():
+                        line_buffer += char
+                        if echo:
+                            self.writer.write(data)
+                            await self.writer.drain()
+                except UnicodeDecodeError:
+                    continue
+
             except Exception as e:
                 log.error(f"[TELNET] Read error: {e}")
                 return None
@@ -146,7 +163,7 @@ class HoneyTelnetSession:
                 continue
 
             self._write("Password: ")
-            password = await self._read_line()
+            password = await self._read_line(echo=False)
             if password is None:
                 return False
 
@@ -154,11 +171,16 @@ class HoneyTelnetSession:
 
             if self.auth_manager.is_granted(self.peer_info["ip"]):
                 self.shell = FakeShell(log, username=username)
-                self._prompt = f"{username}@fakehost:{self.shell.cwd}$ "
-                self._write("\r\nWelcome to Fake Honeypot Shell\r\n")
+                self._prompt = f"\033[01;32m{username}@ubuntu\033[00m:\033[01;34m{self.shell.cwd}\033[00m$ "
+                self._write("\r\nWelcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-89-generic x86_64)\r\n\r\n")
+                self._write(" * Documentation:  https://help.ubuntu.com\r\n")
+                self._write(" * Management:     https://landscape.canonical.com\r\n")
+                self._write(" * Support:        https://ubuntu.com/advantage\r\n")
                 self._write(self._prompt)
                 return True
 
+            await asyncio.sleep(2.0)
+            self._write("\r\nLogin incorrect\r\n")
             self._write("\r\nLogin incorrect\r\n")
 
         return False
@@ -173,7 +195,6 @@ class HoneyTelnetSession:
         log.info(f"[TELNET] Command received (len={len(line)} count={self._cmd_count})")
 
         if self._cmd_count > MAX_COMMANDS_PER_SESSION:
-            # self._cmd_count = MAX_COMMANDS_PER_SESSION
             self._write("\r\nSession command limit reached. Goodbye.\r\n")
             return False
 
@@ -205,7 +226,7 @@ class HoneyTelnetSession:
 
     async def run(self):
         self._reset_idle_timeout()
-
+        self.writer.write(b'\xff\xfb\x01\xff\xfb\x03')
         try:
             if not await self._handle_login():
                 return
@@ -215,7 +236,7 @@ class HoneyTelnetSession:
                 if line is None:
                     break
 
-                self._write(line + "\n")
+                # self._write(line + "\n")
                 continue_session = await self._handle_command(line)
                 if not continue_session:
                     break
@@ -239,3 +260,10 @@ class HoneyTelnetSession:
                 await self.writer.wait_closed()
             except ConnectionResetError:
                 pass
+
+    def _handle_backspace(self, line_buffer: str, echo: bool) -> str:
+        if len(line_buffer) > 0:
+            line_buffer = line_buffer[:-1]
+            if echo:
+                self.writer.write(b'\x08 \x08')
+        return line_buffer
