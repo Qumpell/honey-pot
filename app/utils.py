@@ -82,16 +82,3 @@ def sanitize_identity(value: str, max_len=64) -> str:
     value = value[:max_len]
     value = value.replace("\x00", "")
     return "".join(c if c.isprintable() else "_" for c in value)
-
-
-def process_telnet_data(data: bytes) -> bytes:
-    processed = bytearray()
-    i = 0
-    while i < len(data):
-        byte = data[i]
-        if byte == 0xFF:
-            i += 3
-        else:
-            processed.append(byte)
-            i += 1
-    return bytes(processed)

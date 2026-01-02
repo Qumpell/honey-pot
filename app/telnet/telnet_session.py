@@ -2,7 +2,7 @@ import asyncio
 import codecs
 
 from app.auth_manager import AuthManager
-from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT, BRUTE_MAX
+from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT, BRUTE_MAX, HISTORY_LIMIT
 from app.db import log_event
 from app.fake_shell import FakeShell
 from app.utils import now_iso, log, sanitize_input, EventType, SupportedProtocols, to_json, sanitize_identity, \
@@ -79,7 +79,8 @@ class HoneyTelnetSession:
 
         self._cmd_count = 0
         self._idle_task = None
-        # self._buffer = ""
+        self._history = []
+        self._history_index = 0
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
         self.shell = None
         self._prompt = ""
@@ -107,49 +108,52 @@ class HoneyTelnetSession:
             data = text.replace("\n", "\r\n").encode('utf-8')
             self.writer.write(data)
 
+
     async def _read_line(self, echo=True):
         line_buffer = ""
+        self._history_index = len(self._history)
+
         while True:
             try:
-                data = await self.reader.read(1)
-                if not data:
-                    return None
+                if len(line_buffer) > MAX_COMMAND_LENGTH:
+                    self._write("\r\n-bash: command too long\r\n")
+                    return ""
 
+                data = await self.reader.read(1)
+                if not data: return None
                 self._reset_idle_timeout()
 
+                # A. Telnet IAC
+                if data == b'\xff':
+                    ret = await self._handle_telnet_iac(echo)
+                    if ret == "__CTRL_C__":
+                        return "" # Pusta linia = nowy prompt
+                    continue
+
+                # B. Ctrl+C
+                if data == b'\x03':
+                    if echo: self._write("^C\r\n")
+                    return ""
+
+                # C. Arrows
+                if data == b'\x1b':
+                    line_buffer = await self._handle_escape_sequence(line_buffer)
+                    continue
+
+                # D. Backspace
                 if data in (b'\x08', b'\x7f'):
                     line_buffer = self._handle_backspace(line_buffer, echo)
                     continue
+
                 if data in (b'\r', b'\n'):
-                    if data == b'\r':
-                        try:
-                            next_byte = await asyncio.wait_for(self.reader.read(1), timeout=0.01)
-                            if next_byte != b'\n' and next_byte:
-                                pass
-                        except asyncio.TimeoutError:
-                            pass
+                    return await self._handle_enter(data, line_buffer, echo)
 
-                    if echo:
-                        self._write("\r\n")
-                    return line_buffer
-
-                if data == b'\xff':
-                    await self.reader.read(2)
-                    continue
-
-                try:
-                    char = data.decode('utf-8')
-                    if char.isprintable():
-                        line_buffer += char
-                        if echo:
-                            self.writer.write(data)
-                            await self.writer.drain()
-                except UnicodeDecodeError:
-                    continue
+                line_buffer = self._handle_printable_char(data, line_buffer, echo)
 
             except Exception as e:
                 log.error(f"[TELNET] Read error: {e}")
                 return None
+
 
     async def _handle_login(self):
         for _ in range(BRUTE_MAX):
@@ -159,7 +163,7 @@ class HoneyTelnetSession:
                 return False
 
             username = sanitize_input(username, 64)
-            if not username:
+            if not username.strip():
                 continue
 
             self._write("Password: ")
@@ -179,8 +183,7 @@ class HoneyTelnetSession:
                 self._write(self._prompt)
                 return True
 
-            await asyncio.sleep(2.0)
-            self._write("\r\nLogin incorrect\r\n")
+            await asyncio.sleep(1.0)
             self._write("\r\nLogin incorrect\r\n")
 
         return False
@@ -236,7 +239,6 @@ class HoneyTelnetSession:
                 if line is None:
                     break
 
-                # self._write(line + "\n")
                 continue_session = await self._handle_command(line)
                 if not continue_session:
                     break
@@ -266,4 +268,84 @@ class HoneyTelnetSession:
             line_buffer = line_buffer[:-1]
             if echo:
                 self.writer.write(b'\x08 \x08')
+        return line_buffer
+
+    async def _handle_history_navigation(self, direction: str, current_buffer: str) -> str:
+        if not self._history:
+            return current_buffer
+
+        if direction == "UP":
+            if self._history_index > 0:
+                self._history_index -= 1
+            else:
+                return current_buffer
+        elif direction == "DOWN":
+            if self._history_index < len(self._history):
+                self._history_index += 1
+            else:
+                return current_buffer
+
+        for _ in range(len(current_buffer)):
+            self.writer.write(b'\x08 \x08')
+        new_buffer = ""
+        if self._history_index < len(self._history):
+            new_buffer = self._history[self._history_index]
+
+        self.writer.write(new_buffer.encode('utf-8'))
+        await self.writer.drain()
+        return new_buffer
+
+    async def _handle_escape_sequence(self, current_buffer: str) -> str:
+        try:
+            seq = await asyncio.wait_for(self.reader.read(2), timeout=0.1)
+            if seq == b'[A':
+                return await self._handle_history_navigation("UP", current_buffer)
+            elif seq == b'[B':
+                return await self._handle_history_navigation("DOWN", current_buffer)
+        except asyncio.TimeoutError:
+            pass
+        return current_buffer
+
+    async def _handle_enter(self, data, line_buffer, echo):
+        if data == b'\r':
+            try:
+                nxt = await asyncio.wait_for(self.reader.read(1), timeout=0.01)
+                if nxt != b'\n': pass
+            except: pass
+
+        if echo:
+            self._write("\r\n")
+
+        clean_line = line_buffer.strip()
+
+        if clean_line and echo:
+            if not self._history or self._history[-1] != clean_line:
+                self._history.append(clean_line)
+                if len(self._history) > HISTORY_LIMIT:
+                    self._history.pop(0)
+
+        return line_buffer
+
+    async def _handle_telnet_iac(self, echo):
+        try:
+            cmd = await self.reader.read(1)
+            if cmd == b'\xf4':
+                if echo: self._write("^C\r\n")
+                return "__CTRL_C__"
+
+            if cmd in (b'\xfb', b'\xfc', b'\xfd', b'\xfe'):
+                await self.reader.read(1)
+        except Exception:
+            pass
+        return None
+
+    def _handle_printable_char(self, data, line_buffer, echo):
+        try:
+            char = data.decode('utf-8')
+            if char.isprintable():
+                line_buffer += char
+                if echo:
+                    self.writer.write(data)
+        except UnicodeDecodeError:
+            pass
         return line_buffer

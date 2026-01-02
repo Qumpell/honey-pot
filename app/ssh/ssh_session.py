@@ -46,6 +46,10 @@ class HoneySSHSession(asyncssh.SSHServerSession):
     def data_received(self, data, datatype):
         self._reset_idle_timeout()
         if isinstance(data, bytes):
+            if data == b'\x03':
+                self._write("^C\r\n" + self._prompt)
+                self._buffer = ""
+                return
             self._buffer += self._decoder.decode(data)
         else:
             self._buffer += str(data)
@@ -127,8 +131,14 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             return False
 
         self.shell = FakeShell(log, username=username)
-        self._prompt = f"{username}@fakehost:{self.shell.cwd}$ "
-        self._write("\r\nWelcome to Fake Honeypot Shell\r\n")
+        self._prompt = f"\033[01;32m{username}@ubuntu\033[00m:\033[01;34m{self.shell.cwd}\033[00m$ "
+        banner = (
+            "\r\nWelcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-89-generic x86_64)\r\n\r\n"
+            " * Documentation:  https://help.ubuntu.com\r\n"
+            " * Management:     https://landscape.canonical.com\r\n"
+            " * Support:        https://ubuntu.com/advantage\r\n"
+        )
+        self._write(banner)
         self._write(self._prompt)
         return True
 
