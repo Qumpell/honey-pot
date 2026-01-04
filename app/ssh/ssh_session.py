@@ -47,15 +47,24 @@ class HoneySSHSession(asyncssh.SSHServerSession):
         self._reset_idle_timeout()
         if isinstance(data, bytes):
             if data == b'\x03':
+                self._buffer = ""
                 self._prompt = self.shell.get_prompt()
                 self._write("^C\r\n" + self._prompt)
-                self._buffer = ""
                 return
-            self._buffer += self._decoder.decode(data)
+
+            try:
+                self._buffer += self._decoder.decode(data)
+            except UnicodeDecodeError:
+                pass
+
         else:
             self._buffer += str(data)
-        task = asyncio.create_task(self._process_buffer())
-        task.add_done_callback(lambda t: log.error(f"Buffer error: {t.exception()}") if t.exception() else None)
+        if "\n" in self._buffer:
+            task = asyncio.create_task(self._process_buffer())
+            task.add_done_callback(
+                lambda t: log.error(f"Buffer error: {t.exception()}")
+                if t.exception() else None
+            )
 
     async def _process_buffer(self):
         async with self._process_lock:

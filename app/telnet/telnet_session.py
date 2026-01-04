@@ -134,7 +134,7 @@ class HoneyTelnetSession:
                 if data == b'\x03':
                     if echo:
                         self._prompt = self.shell.get_prompt()
-                        self._write("^C\r\n" + self._prompt)
+                        self._write("^C\r\n")
                     return ""
 
                 # C. Arrows
@@ -243,6 +243,11 @@ class HoneyTelnetSession:
                 if line is None:
                     break
 
+                if line == "__CTRL_C__":
+                    self._prompt = self.shell.get_prompt()
+                    self._write(self._prompt)
+                    continue
+
                 continue_session = await self._handle_command(line)
                 if not continue_session:
                     break
@@ -336,7 +341,7 @@ class HoneyTelnetSession:
             if cmd == b'\xf4':
                 if echo:
                     self._prompt = self.shell.get_prompt()
-                    self._write("^C\r\n" + self._prompt)
+                    self._write("^C\r\n")
                 return "__CTRL_C__"
 
             if cmd in (b'\xfb', b'\xfc', b'\xfd', b'\xfe'):
