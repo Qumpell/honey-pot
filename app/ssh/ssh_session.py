@@ -5,7 +5,7 @@ import asyncssh
 
 from app.auth_manager import AuthManager
 from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT
-from app.db import log_event
+from app.db import log_event, PROM_SESSION_GAUGE
 from app.fake_shell import FakeShell
 from app.utils import now_iso, log, sanitize_input, EventType, UNKNOWN, SupportedProtocols, to_json, Classification
 
@@ -26,6 +26,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
     def connection_made(self, chan):
         self._chan = chan
         self._reset_idle_timeout()
+        PROM_SESSION_GAUGE.labels(protocol=SupportedProtocols.SSH.value).inc()
         log.info("[SSH] Session channel opened")
 
     def _reset_idle_timeout(self):
@@ -159,6 +160,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
 
     def connection_lost(self, exc):
         log.info("[SSH] Session closed")
+        PROM_SESSION_GAUGE.labels(protocol=SupportedProtocols.SSH.value).dec()
         if self._idle_task and not self._idle_task.done():
             self._idle_task.cancel()
 

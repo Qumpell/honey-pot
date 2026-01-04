@@ -9,6 +9,7 @@ from app.utils import now_iso, log, SupportedProtocols, EventType, Classificatio
 import asyncio
 from app.startup import start_ssh_honeypot, start_telnet_honeypot
 import signal
+from prometheus_client import start_http_server
 
 shutdown_event = asyncio.Event()
 
@@ -37,6 +38,12 @@ async def test_db():
         await close_db()
 
 async def main():
+    try:
+        start_http_server(8000)
+        log.info("[MONITORING] Prometheus metrics server started on port 8000")
+    except Exception as e:
+        log.error(f"[MONITORING] Failed to start metrics server: {e}")
+
     await init_db()
     stats = StatsManager()
     await stats.load_today_stats()

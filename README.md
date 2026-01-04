@@ -5,6 +5,8 @@ This project is a honeypot system designed to simulate SSH and Telnet servers to
 ## Technologies Used
 
 - **Python 3.12**: Core language for the application.
+- **Prometheus**: Time-series database for collecting honeypot metrics. 
+- **Grafana**: Visualization dashboard for real-time monitoring.
 - **AsyncIO**: For asynchronous operations and handling concurrent connections.
 - **AsyncSSH**: Library for implementing the SSH honeypot server.
 - **AIO SQLite**: For database operations.
@@ -12,43 +14,71 @@ This project is a honeypot system designed to simulate SSH and Telnet servers to
 - **Docker**: For containerized deployment.
 - **SQLite**: Database for storing logs and daily summaries.
 
-## Setup Instructions
+## Monitoring & Visualization
 
+The system includes a built-in monitoring stack that provides:
+
+* **Live Attack Distribution**: Pie chart showing types of attacks (SSH vs Telnet).
+* **Attack Velocity**: Real-time rate of events.
+* **Active Sessions**: Monitoring current connections to the honeypot.
+* **Historical Data**: Analysis of trends over time.
+
+## Setup Instructions
 ### Prerequisites
 
-- Docker and Docker Compose installed on your system.
-- Python 3.12 if running locally (though Docker is recommended).
+* Docker and Docker Compose installed.
+* A `.env` file in the root directory with the following content:
+```env
+GRAFANA_PASSWORD=your_secure_password
+```
 
-### Using Docker (Recommended)
+### Deployment (Docker Compose)
 
-1. Clone or download the project files to your local machine.
-2. Navigate to the project root directory.
-3. Run the following command to build and start the honeypot:
+1. **Build and start the services**:
+```bash
+docker-compose up --build -d
+```
 
-   ```bash
-   docker-compose up --build
-   ```
 
-   This will start the honeypot services with SSH on port 2222 and Telnet on port 2223, mapped to host ports 22 and 23 respectively.
+This starts:
+* **Honeypot**: Ports 22 (SSH) and 23 (Telnet).
+* **Prometheus**: Internal metrics collection (port 9090).
+* **Grafana**: Dashboard UI (port 3000, bound to localhost for security).
 
-4. The application will automatically initialize the database and start logging.
 
-### Local Setup (Alternative)
+2. **Access the Dashboard (Secure Tunneling)**:
+   Since Grafana is bound to `127.0.0.1`, create an SSH tunnel from your local machine to the VM:
+```bash
+ssh -L 3000:localhost:3000 your_user@your_vm_ip
+```
 
-1. Install dependencies:
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+Now, open your browser and go to: `http://localhost:3000`
+* **Login**: `admin`
+* **Password**: (The value from your `.env` file)
 
-2. Ensure the data and logs directories exist (they will be created automatically if needed).
-3. Run the main script:
 
-   ```bash
-   python main.py
-   ```
+### Automatic Provisioning
 
-4. The honeypot will start SSH on port 2222 and Telnet on port 2223.
+The project is configured to automatically set up the monitoring environment:
+
+* **Data Sources**: Prometheus is automatically connected to Grafana.
+* **Dashboards**: The "Honeypot Dashboard" is automatically imported from `grafana/dashboards/honeypot.json`.
+
+## Testing and Verification
+
+1. **Simulate an attack**:
+```bash
+ssh user@your_vm_ip -p 22
+```
+
+
+2. **Verify in Grafana**:
+   Observe the "VELOCITY" and "ATTACK DISTRIBUTION" panels. The data should refresh automatically as you interact with the honeypot.
+3. **Check logs via terminal**:
+```bash
+docker exec -it honeypot_app sqlite3 /app/data/honeypot.db "SELECT * FROM logs ORDER BY id DESC LIMIT 5;"
+```
 
 ### Environment Variables
 
@@ -61,6 +91,7 @@ You can configure the honeypot using environment variables defined in .env or vi
 - `HP_SESSION_TIMEOUT`: Session idle timeout in seconds (default: 300).
 - `HP_BRUTE_MIN/MAX`: Minimum/maximum attempts before granting access (default: 3/7).
 - `HP_DB_PATH`: Database file path (default: honeypot.db).
+- `GRAFANA_PASSWORD`: Password to grafana.
 
 ## Database Location
 
@@ -94,7 +125,7 @@ To test the honeypot and verify attack detection:
 1. **Run the Honeypot**: Start the services as described in setup.
 
 2. **Simulate Attacks**:
-   - SSH: Use `ssh user@host -p 2222` and attempt logins with fake credentials.
+   - SSH: Use `ssh user@host -p 22` and attempt logins with fake credentials.
    - Telnet: Use `telnet host 23` and attempt logins.
 
 3. **Verify Logs**: 

@@ -3,7 +3,7 @@ import codecs
 
 from app.auth_manager import AuthManager
 from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT, BRUTE_MAX, HISTORY_LIMIT
-from app.db import log_event
+from app.db import log_event, PROM_SESSION_GAUGE
 from app.fake_shell import FakeShell
 from app.utils import now_iso, log, sanitize_input, EventType, SupportedProtocols, to_json, sanitize_identity, \
     hash_secret, Classification
@@ -233,6 +233,7 @@ class HoneyTelnetSession:
 
     async def run(self):
         self._reset_idle_timeout()
+        PROM_SESSION_GAUGE.labels(protocol=SupportedProtocols.TELNET.value).inc()
         self.writer.write(b'\xff\xfb\x01\xff\xfb\x03')
         try:
             if not await self._handle_login():
@@ -255,6 +256,7 @@ class HoneyTelnetSession:
         except Exception as e:
             log.error(f"[TELNET] Session error: {e}")
         finally:
+            PROM_SESSION_GAUGE.labels(protocol=SupportedProtocols.TELNET.value).dec()
             if self._idle_task and not self._idle_task.done():
                 self._idle_task.cancel()
             if not self.writer.is_closing():

@@ -2,12 +2,15 @@ import asyncio
 import json
 import os
 from typing import Optional, Dict
-
+from prometheus_client import Counter, Gauge
 import aiosqlite
 
 from app.config import SCHEMA_FILE, DB_PATH
 from app.stats import StatsManager
 from app.utils import Classification, EventType, SupportedProtocols
+
+PROM_EVENTS = Counter('honeypot_events_total', 'Events by classification', ['protocol', 'classification'])
+PROM_SESSION_GAUGE = Gauge('honeypot_active_sessions', 'Current active sessions', ['protocol'])
 
 _DB_CONN: Optional[aiosqlite.Connection] = None
 _DB_LOCK = asyncio.Lock()
@@ -117,6 +120,11 @@ async def log_event(timestamp: str,
             raw, parsed, classification_str, confidence, details, headers
         ))
         await _DB_CONN.commit()
+
+    PROM_EVENTS.labels(
+        protocol=protocol_str,
+        classification=classification_str
+    ).inc()
 
     if _STATS_MANAGER:
         asyncio.create_task(_STATS_MANAGER.register_event(classification_str))
