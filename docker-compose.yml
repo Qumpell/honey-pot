@@ -1,7 +1,7 @@
 services:
   honeypot:
     build: .
-    container_name: production_honeypot
+    container_name: honeypot_app
     restart: always
     ports:
       - "22:2222"   # SSH
