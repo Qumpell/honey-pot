@@ -23,6 +23,8 @@ The system includes a built-in monitoring stack that provides:
 * **Active Sessions**: Monitoring current connections to the honeypot.
 * **Historical Data**: Analysis of trends over time.
 
+![Honeypot Dashboard](screenshots/dashboard.png)
+
 ## Setup Instructions
 ### Prerequisites
 
