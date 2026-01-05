@@ -8,9 +8,16 @@ class AuthManager:
         self._thresholds = {}
         self._granted = set()
         self._lock = asyncio.Lock()
+        self._tried_users = {}
 
-    async def register_attempt(self, ip: str):
+    async def register_attempt(self, ip: str, username:str):
         async with self._lock:
+
+            if username:
+                if ip not in self._tried_users:
+                    self._tried_users[ip] = set()
+                self._tried_users[ip].add(username)
+
             cur = self._attempts.get(ip, 0) + 1
             self._attempts[ip] = cur
 
@@ -29,3 +36,6 @@ class AuthManager:
 
     def is_granted(self, ip: str) -> bool:
         return ip in self._granted
+
+    def get_user_count(self, ip: str) -> int:
+        return len(self._tried_users.get(ip, set()))

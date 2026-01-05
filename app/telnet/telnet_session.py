@@ -1,12 +1,13 @@
 import asyncio
 import codecs
+import time
 
 from app.auth_manager import AuthManager
 from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT, BRUTE_MAX, HISTORY_LIMIT
 from app.db import log_event, PROM_SESSION_GAUGE
 from app.fake_shell import FakeShell
 from app.utils import now_iso, log, sanitize_input, EventType, SupportedProtocols, to_json, sanitize_identity, \
-    hash_secret, Classification
+    hash_secret, Classification, UNKNOWN, classify_attempt
 
 
 class HoneyTelnetAuthHandler:
@@ -14,7 +15,7 @@ class HoneyTelnetAuthHandler:
         self.auth_manager = auth_manager
         self.peer_info = peer_info
 
-    async def authenticate(self, username, password):
+    async def authenticate(self, username, password, start_time):
         sanitized_username = sanitize_identity(username)
         password_hash = hash_secret(password)
         log.info(
@@ -28,6 +29,10 @@ class HoneyTelnetAuthHandler:
             "password_hash": password_hash,
         })
 
+        granted, attempts, threshold = await self.auth_manager.register_attempt(self.peer_info["ip"], sanitized_username)
+        unique_users = self.auth_manager.get_user_count(self.peer_info["ip"])
+        classification = classify_attempt(username, password, start_time, unique_users)
+
         await log_event(
             timestamp=now_iso(),
             src_ip=self.peer_info["ip"],
@@ -37,13 +42,13 @@ class HoneyTelnetAuthHandler:
             event_type=EventType.AUTH_ATTEMPT,
             raw=f"{sanitized_username}:{password_hash}",
             parsed=parsed,
-            classification=Classification.PASSWORD_GUESS,
-            confidence=0.9,
+            classification=classification,
+            confidence=1.0,
             details="{}",
             headers="{}",
         )
 
-        granted, attempts, threshold = await self.auth_manager.register_attempt(self.peer_info["ip"])
+
         if granted:
             log.info(
                 "[TELNET] Granting fake shell to %s after %d/%d attempts",
@@ -76,7 +81,6 @@ class HoneyTelnetSession:
         self.peer_info = peer_info
         self.auth_manager = auth_manager
         self.auth_handler = HoneyTelnetAuthHandler(auth_manager, peer_info)
-
         self._cmd_count = 0
         self._idle_task = None
         self._history = []
@@ -85,6 +89,8 @@ class HoneyTelnetSession:
         self.shell = None
         self._prompt = ""
         self._closed = False
+        self.auth_activity_detected = False
+        self.start_time = time.time()
 
     def _reset_idle_timeout(self):
         if self._idle_task and not self._idle_task.done():
@@ -168,12 +174,14 @@ class HoneyTelnetSession:
             if not username.strip():
                 continue
 
+            self.auth_activity_detected = True
+
             self._write("Password: ")
             password = await self._read_line(echo=False)
             if password is None:
                 return False
 
-            await self.auth_handler.authenticate(username, password)
+            await self.auth_handler.authenticate(username, password, self.start_time)
 
             if self.auth_manager.is_granted(self.peer_info["ip"]):
                 self.shell = FakeShell(log, username=username)
@@ -214,7 +222,7 @@ class HoneyTelnetSession:
             raw=line,
             parsed=to_json({"cmd": line}),
             classification=Classification.COMMAND_EXEC,
-            confidence=0.7,
+            confidence=1.0,
             details="{}",
             headers="{}",
         )
@@ -256,6 +264,8 @@ class HoneyTelnetSession:
         except Exception as e:
             log.error(f"[TELNET] Session error: {e}")
         finally:
+            if not self.auth_activity_detected:
+                await self._log_scan_event()
             PROM_SESSION_GAUGE.labels(protocol=SupportedProtocols.TELNET.value).dec()
             if self._idle_task and not self._idle_task.done():
                 self._idle_task.cancel()
@@ -362,3 +372,24 @@ class HoneyTelnetSession:
         except UnicodeDecodeError:
             pass
         return line_buffer
+
+    async def _log_scan_event(self):
+        if self.peer_info["ip"] == UNKNOWN:
+            return
+
+        log.info(f"[TELNET] Detected SCAN/PROBE from {self.peer_info['ip']} (Disconnect without auth)")
+
+        await log_event(
+            timestamp=now_iso(),
+            src_ip=self.peer_info["ip"],
+            src_port=self.peer_info["src_port"],
+            dst_port=self.peer_info["dst_port"],
+            protocol=SupportedProtocols.TELNET,
+            event_type=EventType.CONNECTION_CLOSED,
+            raw="Connection closed without auth",
+            parsed=to_json({"reason": "scan_detected"}),
+            classification=Classification.SCANNING,
+            confidence=1.0,
+            details='{"tool": "nmap_likely"}',
+            headers="{}"
+        )

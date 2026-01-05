@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -12,13 +13,17 @@ class EventType(Enum):
     AUTH_GRANTED = "auth_granted"
     AUTH_GRANTED_PUBKEY = "auth_granted_pubkey"
     COMMAND = "command"
-    CONNECTION_LOST = "connection_lost"
+    CONNECTION_CLOSED = "connection_lost"
 
 class Classification(Enum):
     PASSWORD_GUESS = "password_guess"
     PUBKEY_GUESS = "pubkey_guess"
     HONEYPOT_GRANT = "honeypot_grant"
     COMMAND_EXEC = "command_exec"
+    SCANNING = "scanning"
+    EXPLOIT_ATTEMPT = "exploit_attempt"
+    BOT_HARVESTING = "bot_harvesting"
+    CREDENTIAL_STUFFING = "credential_stuffing"
     UNKNOWN = "unknown"
 
 class SupportedProtocols(Enum):
@@ -82,3 +87,18 @@ def sanitize_identity(value: str, max_len=64) -> str:
     value = value[:max_len]
     value = value.replace("\x00", "")
     return "".join(c if c.isprintable() else "_" for c in value)
+
+def classify_attempt(username, password, start_time, unique_user_count) -> Classification:
+    exploit_patterns = ["${", "jndi:", "SELECT ", "UNION ", "OR 1=1", "0x"]
+    combined = (username + password).lower()
+    if any(p in combined for p in exploit_patterns):
+        return Classification.EXPLOIT_ATTEMPT
+
+    if unique_user_count > 3:
+        return Classification.CREDENTIAL_STUFFING;
+
+    duration = time.time() - start_time
+    if duration < 1.0:
+        return Classification.BOT_HARVESTING
+
+    return Classification.PASSWORD_GUESS
