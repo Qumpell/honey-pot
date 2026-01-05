@@ -27,6 +27,8 @@ class HoneySSHServer(asyncssh.SSHServer):
 
     def connection_made(self, conn):
         self.conn = conn
+        peer = self._get_peer_info()
+        asyncio.create_task(self.auth_manager.check_aggressive_scan(peer["ip"]))
         HoneySSHServer._all_connections.add(conn)
         if _CONN_SEMAPHORE.locked():
             log.warning("[SSH] Connection limit reached")

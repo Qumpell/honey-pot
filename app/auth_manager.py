@@ -13,6 +13,8 @@ class AuthManager:
         self._tried_users = {}
         self._last_seen = {}
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        self._conn_history = {}
+        self._last_scan_log = {}
 
     async def register_attempt(self, ip: str, username:str):
         async with self._lock:
@@ -67,6 +69,11 @@ class AuthManager:
                 self._tried_users.pop(ip, None)
                 self._last_seen.pop(ip, None)
                 self._granted.discard(ip)
+                self._conn_history.pop(ip, None)
+                self._last_scan_log.pop(ip, None)
+
+            for ip in self._conn_history:
+                self._conn_history[ip] = [ts for ts in self._conn_history[ip] if now - ts < 60]
 
             if expired_ips:
                 from app.utils import log
@@ -80,3 +87,23 @@ class AuthManager:
             except asyncio.CancelledError:
                 from app.utils import log
                 log.debug("[AUTH] Cleanup task cancelled successfully")
+
+    async def check_aggressive_scan(self, ip: str) -> bool:
+        async with self._lock:
+            now = time.time()
+            if ip not in self._conn_history:
+                self._conn_history[ip] = []
+
+            self._conn_history[ip].append(now)
+            self._conn_history[ip] = [ts for ts in self._conn_history[ip] if now - ts < 10]
+
+            return len(self._conn_history[ip]) > 6
+
+    async def should_log_scan(self, ip: str) -> bool:
+        async with self._lock:
+            now = time.time()
+            last_log = self._last_scan_log.get(ip, 0)
+            if now - last_log > 600:
+                self._last_scan_log[ip] = now
+                return True
+            return False

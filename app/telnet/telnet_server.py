@@ -75,6 +75,7 @@ class HoneyTelnetServer:
             "src_port": peer[1] if peer and len(peer) > 1 else 0,
             "dst_port": sock[1] if sock and len(sock) > 1 else 0,
         }
+        await self.auth_manager.check_aggressive_scan(peer_info['ip'])
 
         log.info(f"[TELNET] New connection from {peer_info['ip']}:{peer_info['src_port']}")
 

@@ -1,5 +1,6 @@
 import asyncio
 import codecs
+import random
 import time
 
 from app.auth_manager import AuthManager
@@ -193,7 +194,7 @@ class HoneyTelnetSession:
                 self._write(self._prompt)
                 return True
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(random.uniform(0.1, 0.5))
             self._write("\r\nLogin incorrect\r\n")
 
         return False
@@ -377,19 +378,23 @@ class HoneyTelnetSession:
         if self.peer_info["ip"] == UNKNOWN:
             return
 
-        log.info(f"[TELNET] Detected SCAN/PROBE from {self.peer_info['ip']} (Disconnect without auth)")
+        is_aggressive = await self.auth_manager.check_aggressive_scan(self.peer_info["ip"])
+        if await self.auth_manager.should_log_scan(self.peer_info["ip"]):
+            detail_msg = "aggressive_nmap_style" if is_aggressive else "single_connection_probe"
+            log.info(f"[SCAN] Detected {detail_msg} from {self.peer_info['ip']}")
 
-        await log_event(
-            timestamp=now_iso(),
-            src_ip=self.peer_info["ip"],
-            src_port=self.peer_info["src_port"],
-            dst_port=self.peer_info["dst_port"],
-            protocol=SupportedProtocols.TELNET,
-            event_type=EventType.CONNECTION_CLOSED,
-            raw="Connection closed without auth",
-            parsed=to_json({"reason": "scan_detected"}),
-            classification=Classification.SCANNING,
-            confidence=1.0,
-            details='{"tool": "nmap_likely"}',
-            headers="{}"
-        )
+            await log_event(
+                timestamp=now_iso(),
+                src_ip=self.peer_info["ip"],
+                src_port=self.peer_info["src_port"],
+                dst_port=self.peer_info["dst_port"],
+                protocol=SupportedProtocols.TELNET,
+                event_type=EventType.CONNECTION_CLOSED,
+                raw="Connection closed without auth",
+                parsed=to_json({"reason": "scan_detected"}),
+                classification=Classification.SCANNING,
+                confidence=1.0,
+                details=to_json({"conn_frequency": "high" if is_aggressive else "low"}),
+                headers="{}"
+            )
+
