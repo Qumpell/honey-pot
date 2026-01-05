@@ -69,10 +69,6 @@ async def main():
         pass
     finally:
         log.info("\n[SHUTDOWN] Stopping servers...")
-        try:
-            await asyncio.wait_for(telnet_server.stop(), timeout=3.0)
-        except Exception as e:
-            log.error(f"Telnet stop error: {e}")
 
         try:
             await HoneySSHServer.close_all_sessions()
@@ -80,6 +76,12 @@ async def main():
             await asyncio.wait_for(ssh_server.wait_closed(), timeout=3.0)
         except Exception as e:
             log.error(f"SSH stop error: {e}")
+
+        try:
+            await telnet_server.auth_manager.close_cleaning_task()
+            await asyncio.wait_for(telnet_server.stop(), timeout=3.0)
+        except Exception as e:
+            log.error(f"Telnet stop error: {e}")
 
         log.info("[SHUTDOWN] Flushing final stats to database...")
         try:

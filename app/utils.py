@@ -89,15 +89,16 @@ def sanitize_identity(value: str, max_len=64) -> str:
     return "".join(c if c.isprintable() else "_" for c in value)
 
 def classify_attempt(username, password, start_time, unique_user_count) -> Classification:
-    exploit_patterns = ["${", "jndi:", "SELECT ", "UNION ", "OR 1=1", "0x"]
+    duration = time.time() - start_time
+
+    exploit_patterns = ["${", "jndi:", "SELECT ", "UNION ", "OR 1=1", "0x", "${jndi:", "/etc/passwd", "<?php"]
     combined = (username + password).lower()
     if any(p in combined for p in exploit_patterns):
         return Classification.EXPLOIT_ATTEMPT
 
     if unique_user_count > 3:
-        return Classification.CREDENTIAL_STUFFING;
+        return Classification.CREDENTIAL_STUFFING
 
-    duration = time.time() - start_time
     if duration < 1.0:
         return Classification.BOT_HARVESTING
 

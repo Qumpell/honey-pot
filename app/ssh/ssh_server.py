@@ -93,8 +93,6 @@ class HoneySSHServer(asyncssh.SSHServer):
             granted_info=(granted, attempts, threshold),
         )
 
-
-
     async def validate_public_key(self, username, key):
         self.auth_activity_detected = True
         peer = self._get_peer_info()
