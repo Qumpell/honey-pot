@@ -7,7 +7,7 @@ from app.auth_manager import AuthManager
 from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDLE_TIMEOUT
 from app.db import log_event, PROM_SESSION_GAUGE
 from app.fake_shell import FakeShell
-from app.utils import now_iso, log, sanitize_input, EventType, UNKNOWN, SupportedProtocols, to_json, Classification
+from app.utils import now_iso, log, sanitize_input, EventType, UNKNOWN, SupportedProtocols, to_json, classify_command
 
 
 class HoneySSHSession(asyncssh.SSHServerSession):
@@ -99,6 +99,7 @@ class HoneySSHSession(asyncssh.SSHServerSession):
 
     async def _handle_shell_command(self, line: str):
         peer = self._get_peer_info()
+        classification = classify_command(line)
         await log_event(
             timestamp=now_iso(),
             src_ip=peer["ip"],
@@ -108,8 +109,8 @@ class HoneySSHSession(asyncssh.SSHServerSession):
             event_type=EventType.COMMAND,
             raw=line,
             parsed=to_json({"cmd": line}),
-            classification=Classification.COMMAND_EXEC,
-            confidence=0.7,
+            classification=classification,
+            confidence=1.0,
             details="{}",
             headers="{}",
         )

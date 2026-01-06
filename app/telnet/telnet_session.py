@@ -8,7 +8,7 @@ from app.config import MAX_COMMAND_LENGTH, MAX_COMMANDS_PER_SESSION, SESSION_IDL
 from app.db import log_event, PROM_SESSION_GAUGE
 from app.fake_shell import FakeShell
 from app.utils import now_iso, log, sanitize_input, EventType, SupportedProtocols, to_json, sanitize_identity, \
-    hash_secret, Classification, UNKNOWN, classify_attempt
+    hash_secret, Classification, UNKNOWN, classify_attempt, classify_command
 
 
 class HoneyTelnetAuthHandler:
@@ -213,6 +213,7 @@ class HoneyTelnetSession:
             self._write("\r\nSession command limit reached. Goodbye.\r\n")
             return False
 
+        classification = classify_command(line)
         await log_event(
             timestamp=now_iso(),
             src_ip=self.peer_info["ip"],
@@ -222,7 +223,7 @@ class HoneyTelnetSession:
             event_type=EventType.COMMAND,
             raw=line,
             parsed=to_json({"cmd": line}),
-            classification=Classification.COMMAND_EXEC,
+            classification=classification,
             confidence=1.0,
             details="{}",
             headers="{}",
