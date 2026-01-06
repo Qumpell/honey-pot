@@ -99,7 +99,7 @@ You can configure the honeypot using environment variables defined in .env or vi
 
 The SQLite database is stored at honeypot.db (relative to the project root or container's `/app/data`). It contains two main tables:
 
-- logs: Stores individual events (e.g., auth attempts, commands).
+- `logs`: Stores individual events (e.g., auth attempts, commands).
 - `daily_summary`: Aggregates events by day, including totals and classifications.
 
 Use tools like SQLite Browser or command-line `sqlite3` to inspect the database.
