@@ -175,7 +175,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (classification) (honeypot_events_total)",
+          "expr": "sum by (classification) (\r\n  increase(honeypot_events_total[$__range])\r\n)",
           "legendFormat": "{{classification}}",
           "range": true,
           "refId": "A"
