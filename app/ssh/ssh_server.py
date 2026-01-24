@@ -23,12 +23,14 @@ class HoneySSHServer(asyncssh.SSHServer):
         self.auth_manager = auth_manager
         self.auth_activity_detected = False
         self.start_time = time.time()
-
+        self.peer_info = None
 
     def connection_made(self, conn):
+        log.debug("[SSH] connection_made() called")
         self.conn = conn
-        peer = self._get_peer_info()
-        asyncio.create_task(self.auth_manager.check_aggressive_scan(peer["ip"]))
+        self.peer_info = self._get_peer_info()
+        asyncio.create_task(
+            self.auth_manager.check_aggressive_scan(self.peer_info["ip"]))
         HoneySSHServer._all_connections.add(conn)
         if _CONN_SEMAPHORE.locked():
             log.warning("[SSH] Connection limit reached")
@@ -188,13 +190,28 @@ class HoneySSHServer(asyncssh.SSHServer):
         return HoneySSHSession(self.conn, auth_manager=self.auth_manager)
 
     def connection_lost(self, exc):
+        log.info(f"[SSH] connection_lost() called with exc={exc}")
         HoneySSHServer._all_connections.discard(self.conn)
+        log.debug(f"[SSH] Connection lost. auth_activity_detected={self.auth_activity_detected}")
         if not self.auth_activity_detected:
-            peer = self._get_peer_info()
-            asyncio.create_task(self._log_scan_event(peer))
+            if self.peer_info:
+                log.info(f"[SSH] Creating scan event task for {self.peer_info['ip']}")
+                task = asyncio.create_task(self._log_scan_event(self.peer_info))
+                task.add_done_callback(self._log_scan_error_handler)
+            else:
+                log.warning("[SSH] peer_info is None, cannot log scan event")
+        else:
+            log.info(f"[SSH] NOT logging scan event because auth_activity_detected=True")
         if self._acquired_semaphore:
             _CONN_SEMAPHORE.release()
             self._acquired_semaphore = False
+
+    @staticmethod
+    def _log_scan_error_handler(task):
+        try:
+            task.result()
+        except Exception as e:
+            log.error(f"[SSH] Error logging scan event: {e}")
 
     @classmethod
     async def close_all_sessions(cls):
@@ -206,22 +223,38 @@ class HoneySSHServer(asyncssh.SSHServer):
         await asyncio.gather(*[c.wait_closed() for c in cls._all_connections], return_exceptions=True)
 
     async def _log_scan_event(self, peer):
-        if peer["ip"] == UNKNOWN:
-            return
+        try:
+            if peer["ip"] == UNKNOWN:
+                log.info("[SSH] Scan event skipped: peer IP is UNKNOWN")
+                return
 
-        log.info(f"[SSH] Detected SCAN/PROBE from {peer['ip']} (Disconnect without auth)")
+            log.info(f"[SSH] Checking should_log_scan for {peer['ip']}")
+            should_log = await self.auth_manager.should_log_scan(peer["ip"])
+            log.info(f"[SSH] should_log_scan returned: {should_log}")
 
-        await log_event(
-            timestamp=now_iso(),
-            src_ip=peer["ip"],
-            src_port=peer["src_port"],
-            dst_port=peer["dst_port"],
-            protocol=SupportedProtocols.SSH,
-            event_type=EventType.CONNECTION_CLOSED,
-            raw="Connection closed without auth",
-            parsed=to_json({"reason": "scan_detected"}),
-            classification=Classification.SCANNING,
-            confidence=1.0,
-            details='{"tool": "nmap_likely"}',
-            headers="{}"
-        )
+            if not should_log:
+                log.info(
+                    f"[SSH] Scan event filtered by rate limit for {peer['ip']}")
+                return
+
+            log.info(
+                f"[SSH] Detected SCAN/PROBE from {peer['ip']} (Disconnect without auth)")
+
+            await log_event(
+                timestamp=now_iso(),
+                src_ip=peer["ip"],
+                src_port=peer["src_port"],
+                dst_port=peer["dst_port"],
+                protocol=SupportedProtocols.SSH,
+                event_type=EventType.CONNECTION_CLOSED,
+                raw="Connection closed without auth",
+                parsed=to_json({"reason": "scan_detected"}),
+                classification=Classification.SCANNING,
+                confidence=1.0,
+                details='{"tool": "nmap_likely"}',
+                headers="{}"
+            )
+            log.info(f"[SSH] Scan event logged successfully for {peer['ip']}")
+        except Exception as e:
+            log.error(
+                f"[SSH] Exception in _log_scan_event: {e}", exc_info=True)

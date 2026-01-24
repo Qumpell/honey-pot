@@ -127,7 +127,8 @@ class HoneyTelnetSession:
                     return ""
 
                 data = await self.reader.read(1)
-                if not data: return None
+                if not data:
+                    return None
                 self._reset_idle_timeout()
 
                 # A. Telnet IAC
@@ -333,8 +334,10 @@ class HoneyTelnetSession:
         if data == b'\r':
             try:
                 nxt = await asyncio.wait_for(self.reader.read(1), timeout=0.01)
-                if nxt != b'\n': pass
-            except: pass
+                if nxt != b'\n':
+                    pass
+            except:
+                pass
 
         if echo:
             self._write("\r\n")
@@ -398,4 +401,5 @@ class HoneyTelnetSession:
                 details=to_json({"conn_frequency": "high" if is_aggressive else "low"}),
                 headers="{}"
             )
-
+        else:
+            log.info(f"[TELNET] Scan event filtered by rate limit for {self.peer_info['ip']}")
