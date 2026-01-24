@@ -141,7 +141,7 @@ class HoneyTelnetSession:
 
                 # B. Ctrl+C
                 if data == b'\x03':
-                    if echo:
+                    if echo and self.shell:
                         self._prompt = self.shell.get_prompt()
                         self._write("^C\r\n")
                     return ""
@@ -188,10 +188,11 @@ class HoneyTelnetSession:
             if self.auth_manager.is_granted(self.peer_info["ip"]):
                 self.shell = FakeShell(log, username=username)
                 self._prompt = self.shell.get_prompt()
-                self._write("\r\nWelcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-89-generic x86_64)\r\n\r\n")
-                self._write(" * Documentation:  https://help.ubuntu.com\r\n")
-                self._write(" * Management:     https://landscape.canonical.com\r\n")
-                self._write(" * Support:        https://ubuntu.com/advantage\r\n")
+                self._write("\n")
+                self._write("Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-89-generic x86_64)\n\n")
+                self._write(" * Documentation:  https://help.ubuntu.com\n")
+                self._write(" * Management:     https://landscape.canonical.com\n")
+                self._write(" * Support:        https://ubuntu.com/advantage\n\n")
                 self._write(self._prompt)
                 return True
 
