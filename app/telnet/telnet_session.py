@@ -49,7 +49,6 @@ class HoneyTelnetAuthHandler:
             headers="{}",
         )
 
-
         if granted:
             log.info(
                 "[TELNET] Granting fake shell to %s after %d/%d attempts",
@@ -58,21 +57,23 @@ class HoneyTelnetAuthHandler:
                 threshold,
             )
 
-        await log_event(
-            timestamp=now_iso(),
-            src_ip=self.peer_info["ip"],
-            src_port=self.peer_info["src_port"],
-            dst_port=self.peer_info["dst_port"],
-            protocol=SupportedProtocols.TELNET,
-            event_type=EventType.AUTH_GRANTED,
-            raw=f"{sanitized_username}:{password_hash}",
-            parsed=parsed,
-            classification=Classification.HONEYPOT_GRANT,
-            confidence=1.0,
-            details="{}",
-            headers="{}",
-        )
-        return True
+            await log_event(
+                timestamp=now_iso(),
+                src_ip=self.peer_info["ip"],
+                src_port=self.peer_info["src_port"],
+                dst_port=self.peer_info["dst_port"],
+                protocol=SupportedProtocols.TELNET,
+                event_type=EventType.AUTH_GRANTED,
+                raw=f"{sanitized_username}:{password_hash}",
+                parsed=parsed,
+                classification=Classification.HONEYPOT_GRANT,
+                confidence=1.0,
+                details="{}",
+                headers="{}",
+            )
+            return True
+        else:
+            return False
 
 
 class HoneyTelnetSession:
@@ -163,7 +164,6 @@ class HoneyTelnetSession:
             except Exception as e:
                 log.error(f"[TELNET] Read error: {e}")
                 return None
-
 
     async def _handle_login(self):
         for _ in range(BRUTE_MAX):
